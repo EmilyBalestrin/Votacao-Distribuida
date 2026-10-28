@@ -1,0 +1,71 @@
+# Ambiente virtual Python
+.venv/
+venv/
+env/
+ENV/
+
+# Arquivos temporarios do Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Cache e arquivos de testes
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+
+# Configuracoes de outros editores
+.vscode/
+
+# Variaveis de ambiente e segredos locais
+.env
+.env.*
+!.env.example
+
+# Bancos de dados locais (SQLite)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Dados persistidos durante a execucao
+data/
+dados/
+logs/
+*.log
+
+# Arquivos temporarios
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Arquivos de build e distribuicao
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Arquivos gerados por ferramentas
+.cache/
+.ipynb_checkpoints/
+
+# Docker - arquivos temporarios locais
+docker-compose.override.yml
+compose.override.yml
