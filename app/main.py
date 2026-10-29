@@ -5,7 +5,7 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 ID_NO = int(os.getenv("NODE_ID", "1"))
-
+PORTA = int(os.getenv("PORT", "5000"))
 
 @app.route("/")
 def inicio():
