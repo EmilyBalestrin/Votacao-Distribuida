@@ -1,0 +1,47 @@
+
+services:
+  no1:
+    build: .
+    image: votacao-distribuida
+    ports:
+      - "5001:5000"
+    environment:
+      NODE_ID: "1"
+      PORT: "5000"
+      NO1_URL: "http://no1:5000"
+      NO2_URL: "http://no2:5000"
+      NO3_URL: "http://no3:5000"
+    networks:
+      - rede-votacao
+
+  no2:
+    build: .
+    image: votacao-distribuida
+    ports:
+      - "5002:5000"
+    environment:
+      NODE_ID: "2"
+      PORT: "5000"
+      NO1_URL: "http://no1:5000"
+      NO2_URL: "http://no2:5000"
+      NO3_URL: "http://no3:5000"
+    networks:
+      - rede-votacao
+
+  no3:
+    build: .
+    image: votacao-distribuida
+    ports:
+      - "5003:5000"
+    environment:
+      NODE_ID: "3"
+      PORT: "5000"
+      NO1_URL: "http://no1:5000"
+      NO2_URL: "http://no2:5000"
+      NO3_URL: "http://no3:5000"
+    networks:
+      - rede-votacao
+
+networks:
+  rede-votacao:
+    driver: bridge

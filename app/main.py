@@ -12,6 +12,7 @@ PORTA = int(os.getenv("PORT", "5000"))
 ENDERECOS_NOS = {
     1: os.getenv("NO1_URL", "http://localhost:5001"),
     2: os.getenv("NO2_URL", "http://localhost:5002"),
+    3: os.getenv("NO3_URL", "http://localhost:5003"),
 }
 
 @app.route("/")
