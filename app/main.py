@@ -8,11 +8,20 @@ import threading
 import requests
 from flask import request
 from relogio_lamport import RelogioLamport
+from persistencia import Persistencia
 
 app = Flask(__name__)
 
 ID_NO = int(os.getenv("NODE_ID", "1"))
 PORTA = int(os.getenv("PORT", "5000"))
+
+# Banco local de cada no
+CAMINHO_BANCO = os.getenv(
+    "DB_PATH",
+    f"dados/no{ID_NO}.db"
+)
+
+persistencia = Persistencia(CAMINHO_BANCO)
 
 # Enderecos dos nos definidos por configuracao
 ENDERECOS_NOS = {
@@ -285,6 +294,13 @@ def receber_evento():
         "no": ID_NO,
         "origem": origem,
         "relogio": valor_resposta
+    })
+
+@app.route("/mandato", methods=["GET"])
+def consultar_mandato():
+    return jsonify({
+        "no": ID_NO,
+        "mandato": persistencia.obter_mandato()
     })
 
 if __name__ == "__main__":

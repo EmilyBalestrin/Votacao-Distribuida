@@ -11,8 +11,11 @@ services:
       NO1_URL: "http://no1:5000"
       NO2_URL: "http://no2:5000"
       NO3_URL: "http://no3:5000"
+      DB_PATH: "/dados/estado.db"
     networks:
       - rede-votacao
+    volumes:
+      - dados-no1:/dados
 
   no2:
     build: .
@@ -25,8 +28,11 @@ services:
       NO1_URL: "http://no1:5000"
       NO2_URL: "http://no2:5000"
       NO3_URL: "http://no3:5000"
+      DB_PATH: "/dados/estado.db"
     networks:
       - rede-votacao
+    volumes:
+      - dados-no2:/dados
 
   no3:
     build: .
@@ -39,9 +45,17 @@ services:
       NO1_URL: "http://no1:5000"
       NO2_URL: "http://no2:5000"
       NO3_URL: "http://no3:5000"
+      DB_PATH: "/dados/estado.db"
     networks:
       - rede-votacao
+    volumes:
+      - dados-no3:/dados
 
 networks:
   rede-votacao:
     driver: bridge
+
+volumes:
+  dados-no1:
+  dados-no2:
+  dados-no3:
