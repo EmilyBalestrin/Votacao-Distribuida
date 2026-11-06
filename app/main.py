@@ -5,6 +5,9 @@ from comunicacao import consultar_no
 from heartbeat import MonitorHeartbeat
 from eleicao import EleicaoBully
 import threading
+import requests
+from flask import request
+from relogio_lamport import RelogioLamport
 
 app = Flask(__name__)
 
@@ -18,6 +21,8 @@ ENDERECOS_NOS = {
     3: os.getenv("NO3_URL", "http://localhost:5003"),
 }
 
+# Relogio logico independente para cada no
+relogio = RelogioLamport()
 
 # Gerenciador de eleicao
 eleicao = EleicaoBully(
@@ -154,6 +159,133 @@ def receber_coordenador():
         "lider": id_lider
     })
 
+
+@app.route("/relogio", methods=["GET"])
+def consultar_relogio():
+    return jsonify({
+        "no": ID_NO,
+        "relogio": relogio.obter_valor()
+    })
+
+
+@app.route("/relogio/evento", methods=["POST"])
+def registrar_evento():
+    valor = relogio.evento_local()
+
+    print(
+        f"[Lamport] No {ID_NO}: evento local, relogio={valor}",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "relogio": valor
+    })
+
+
+@app.route("/relogio/enviar/<int:id_destino>", methods=["POST"])
+def enviar_evento(id_destino):
+    if id_destino not in ENDERECOS_NOS:
+        return jsonify({
+            "erro": "No de destino desconhecido"
+        }), 404
+
+    if id_destino == ID_NO:
+        return jsonify({
+            "erro": "Escolha outro no"
+        }), 400
+
+    # Incrementa o relogio antes do envio
+    valor_envio = relogio.enviar_mensagem()
+
+    print(
+        f"[Lamport] No {ID_NO}: enviando mensagem "
+        f"para No {id_destino}, relogio={valor_envio}",
+        flush=True
+    )
+
+    try:
+        resposta = requests.post(
+            f"{ENDERECOS_NOS[id_destino]}/relogio/receber",
+            json={
+                "origem": ID_NO,
+                "relogio": valor_envio
+            },
+            timeout=3
+        )
+
+        resposta.raise_for_status()
+
+        dados_resposta = resposta.json()
+
+        # A resposta tambem e uma mensagem recebida
+        valor_resposta = dados_resposta["relogio"]
+        novo_valor = relogio.receber_mensagem(
+            valor_resposta
+        )
+
+        return jsonify({
+            "origem": ID_NO,
+            "destino": id_destino,
+            "relogio_envio": valor_envio,
+            "relogio_destino": valor_resposta,
+            "relogio_atual": novo_valor
+        })
+
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        TypeError
+    ) as erro:
+        print(
+            f"[Lamport] Falha no envio: {erro}",
+            flush=True
+        )
+
+        return jsonify({
+            "erro": "Nao foi possivel comunicar com o no",
+            "destino": id_destino
+        }), 503
+
+
+@app.route("/relogio/receber", methods=["POST"])
+def receber_evento():
+    dados = request.get_json(silent=True) or {}
+
+    origem = dados.get("origem")
+    valor_recebido = dados.get("relogio")
+
+    if (
+        type(origem) is not int
+        or origem not in ENDERECOS_NOS
+        or origem == ID_NO
+        or type(valor_recebido) is not int
+        or valor_recebido < 0
+    ):
+        return jsonify({
+            "erro": "Mensagem invalida"
+        }), 400
+
+    # Atualiza o contador ao receber a mensagem
+    novo_valor = relogio.receber_mensagem(
+        valor_recebido
+    )
+
+    print(
+        f"[Lamport] No {ID_NO}: mensagem do No {origem}, "
+        f"recebido={valor_recebido}, relogio={novo_valor}",
+        flush=True
+    )
+
+    # Envia resposta com um novo evento logico
+    valor_resposta = relogio.enviar_mensagem()
+
+    return jsonify({
+        "no": ID_NO,
+        "origem": origem,
+        "relogio": valor_resposta
+    })
 
 if __name__ == "__main__":
     monitor.iniciar()
