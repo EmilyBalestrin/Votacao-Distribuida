@@ -13,6 +13,11 @@ class EleicaoBully:
         self.eleicao_em_andamento = False
         self.lock = threading.Lock()
 
+        # Controle do tempo de espera da eleicao
+        self.tempo_espera = 5
+        self.temporizador = None
+        self.numero_eleicao = 0
+
     def obter_estado(self):
         with self.lock:
             return {
@@ -28,15 +33,22 @@ class EleicaoBully:
 
             self.eleicao_em_andamento = True
             self.lider_atual = None
+            self.numero_eleicao += 1
+            numero = self.numero_eleicao
+
+            if self.temporizador is not None:
+                self.temporizador.cancel()
+                self.temporizador = None
 
         thread = threading.Thread(
             target=self.iniciar_eleicao,
+            args=(numero,),
             daemon=True
         )
         thread.start()
         return True
 
-    def iniciar_eleicao(self):
+    def iniciar_eleicao(self, numero):
         print(
             f"[Eleicao] No {self.id_no} iniciou uma eleicao",
             flush=True
@@ -68,16 +80,59 @@ class EleicaoBully:
                     flush=True
                 )
 
-        if not respondeu_no_superior:
-            self.anunciar_lider()
-        else:
+        with self.lock:
+            # Ignora resultados de uma eleicao antiga
+            if numero != self.numero_eleicao:
+                return
+
+            # Um coordenador ja foi anunciado
+            if not self.eleicao_em_andamento:
+                return
+
+        if respondeu_no_superior:
             print(
                 f"[Eleicao] No {self.id_no} aguarda coordenador",
                 flush=True
             )
 
+            with self.lock:
+                if (
+                    numero != self.numero_eleicao
+                    or not self.eleicao_em_andamento
+                ):
+                    return
+
+                self.temporizador = threading.Timer(
+                    self.tempo_espera,
+                    self.verificar_timeout,
+                    args=(numero,)
+                )
+                self.temporizador.daemon = True
+                self.temporizador.start()
+        else:
+            self.anunciar_lider()
+
+    def verificar_timeout(self, numero):
         with self.lock:
+            if numero != self.numero_eleicao:
+                return
+
+            if not self.eleicao_em_andamento:
+                return
+
+            if self.lider_atual is not None:
+                return
+
             self.eleicao_em_andamento = False
+            self.temporizador = None
+
+        print(
+            f"[Eleicao] Timeout no No {self.id_no}. "
+            "Reiniciando eleicao.",
+            flush=True
+        )
+
+        self.iniciar_em_thread()
 
     def receber_eleicao(self, origem):
         if origem >= self.id_no:
@@ -88,7 +143,15 @@ class EleicaoBully:
 
     def anunciar_lider(self):
         with self.lock:
+            if not self.eleicao_em_andamento:
+                return
+
             self.lider_atual = self.id_no
+            self.eleicao_em_andamento = False
+
+            if self.temporizador is not None:
+                self.temporizador.cancel()
+                self.temporizador = None
 
         print(
             f"[Eleicao] No {self.id_no} assumiu a lideranca",
@@ -117,9 +180,15 @@ class EleicaoBully:
 
         with self.lock:
             self.lider_atual = id_lider
+            self.eleicao_em_andamento = False
+
+            if self.temporizador is not None:
+                self.temporizador.cancel()
+                self.temporizador = None
 
         print(
             f"[Eleicao] Lider atual: No {id_lider}",
             flush=True
         )
+
         return True
