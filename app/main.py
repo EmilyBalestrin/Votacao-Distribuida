@@ -33,10 +33,10 @@ ENDERECOS_NOS = {
 # Relogio logico independente para cada no
 relogio = RelogioLamport()
 
-# Gerenciador de eleicao
 eleicao = EleicaoBully(
     id_no=ID_NO,
-    enderecos_nos=ENDERECOS_NOS
+    enderecos_nos=ENDERECOS_NOS,
+    persistencia=persistencia
 )
 
 
@@ -128,46 +128,68 @@ def iniciar_eleicao():
         "eleicao_iniciada": iniciada
     })
 
-
 @app.route("/eleicao", methods=["POST"])
 def receber_eleicao():
-    from flask import request
-
     dados = request.get_json(silent=True) or {}
+
     origem = dados.get("origem")
+    mandato = dados.get("mandato")
 
-    if not isinstance(origem, int) or origem not in ENDERECOS_NOS:
-        return jsonify({"erro": "Origem invalida"}), 400
+    if (
+        type(origem) is not int
+        or origem not in ENDERECOS_NOS
+        or type(mandato) is not int
+        or mandato < 0
+    ):
+        return jsonify({
+            "erro": "Dados invalidos"
+        }), 400
 
-    aceita = eleicao.receber_eleicao(origem)
+    aceita = eleicao.receber_eleicao(
+        origem,
+        mandato
+    )
 
     if not aceita:
-        return jsonify({"erro": "Prioridade invalida"}), 400
+        return jsonify({
+            "erro": "Prioridade invalida"
+        }), 400
 
     return jsonify({
         "no": ID_NO,
-        "resposta": "OK"
+        "resposta": "OK",
+        "mandato": persistencia.obter_mandato()
     })
-
 
 @app.route("/coordenador", methods=["POST"])
 def receber_coordenador():
-    from flask import request
-
     dados = request.get_json(silent=True) or {}
+
     id_lider = dados.get("lider")
+    mandato = dados.get("mandato")
 
-    if not isinstance(id_lider, int):
-        return jsonify({"erro": "Lider invalido"}), 400
+    if (
+        type(id_lider) is not int
+        or type(mandato) is not int
+        or mandato < 0
+    ):
+        return jsonify({
+            "erro": "Dados invalidos"
+        }), 400
 
-    if not eleicao.receber_coordenador(id_lider):
-        return jsonify({"erro": "Lider desconhecido"}), 400
+    if not eleicao.receber_coordenador(
+        id_lider,
+        mandato
+    ):
+        return jsonify({
+            "erro": "Anuncio de lider rejeitado"
+        }), 409
 
     return jsonify({
         "no": ID_NO,
-        "lider": id_lider
+        "lider": id_lider,
+        "mandato": mandato
     })
-
 
 @app.route("/relogio", methods=["GET"])
 def consultar_relogio():
