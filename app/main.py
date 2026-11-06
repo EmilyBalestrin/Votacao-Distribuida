@@ -4,6 +4,7 @@ from flask import Flask, jsonify
 from comunicacao import consultar_no
 from heartbeat import MonitorHeartbeat
 from eleicao import EleicaoBully
+import threading
 
 app = Flask(__name__)
 
@@ -17,15 +18,47 @@ ENDERECOS_NOS = {
     3: os.getenv("NO3_URL", "http://localhost:5003"),
 }
 
-monitor = MonitorHeartbeat(
-    id_no=ID_NO,
-    enderecos_nos=ENDERECOS_NOS,
-    intervalo=3
-)
 
+# Gerenciador de eleicao
 eleicao = EleicaoBully(
     id_no=ID_NO,
     enderecos_nos=ENDERECOS_NOS
+)
+
+
+def verificar_mudanca_no(id_no, ativo):
+    estado = eleicao.obter_estado()
+    lider_atual = estado["lider"]
+
+    # Se o lider caiu, iniciar nova eleicao
+    if not ativo and id_no == lider_atual:
+        print(
+            f"[Sistema] Lider {id_no} indisponivel. "
+            "Iniciando nova eleicao.",
+            flush=True
+        )
+
+        eleicao.iniciar_em_thread()
+
+    # Se um no de prioridade maior retornar,
+    # permitir que dispute novamente a lideranca
+    elif ativo and lider_atual is not None:
+        if id_no > lider_atual:
+            print(
+                f"[Sistema] No {id_no} retornou. "
+                "Iniciando nova eleicao.",
+                flush=True
+            )
+
+            eleicao.iniciar_em_thread()
+
+
+# Monitoramento dos servidores
+monitor = MonitorHeartbeat(
+    id_no=ID_NO,
+    enderecos_nos=ENDERECOS_NOS,
+    intervalo=3,
+    ao_mudar_estado=verificar_mudanca_no
 )
 
 @app.route("/")
@@ -121,8 +154,15 @@ def receber_coordenador():
         "lider": id_lider
     })
 
+
 if __name__ == "__main__":
     monitor.iniciar()
+
+    # Aguarda os servidores iniciarem antes da eleicao
+    threading.Timer(
+        5,
+        eleicao.iniciar_em_thread
+    ).start()
 
     app.run(
         host="0.0.0.0",
