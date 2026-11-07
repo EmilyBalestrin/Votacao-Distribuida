@@ -205,3 +205,39 @@ class Persistencia:
             }
             for registro in registros
         ]
+
+##metodo para salvar ou validar uma operação, garantindo que não haja duplicidade ou conflito de dados - idempotência
+    def salvar_ou_validar_operacao(
+        self, id_operacao, eleitor, opcao, mandato, sequencia
+    ):
+        # Primeiro tenta registrar a operacao normalmente
+        sucesso, mensagem = self.salvar_operacao_pendente(
+            id_operacao, eleitor, opcao, mandato, sequencia
+        )
+
+        if sucesso:
+            return True, "Operacao armazenada"
+
+        # Se houve falha, verifica se ela ja existe
+        with self.lock:
+            with self.conectar() as conexao:
+                registro = conexao.execute("""
+                    SELECT eleitor, opcao, mandato, sequencia
+                    FROM operacoes
+                    WHERE id_operacao = ?
+                """, (id_operacao,)).fetchone()
+
+        if registro is None:
+            return False, mensagem
+
+        dados_esperados = (
+            eleitor.strip() if isinstance(eleitor, str) else eleitor,
+            opcao,
+            mandato,
+            sequencia
+        )
+
+        if registro == dados_esperados:
+            return True, "Operacao ja armazenada anteriormente"
+
+        return False, "Conflito nos dados da operacao"

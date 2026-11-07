@@ -352,7 +352,7 @@ def receber_operacao():
             "erro": "Origem nao corresponde ao lider conhecido"
         }), 409
 
-    sucesso, mensagem = persistencia.salvar_operacao_pendente(
+    sucesso, mensagem = persistencia.salvar_ou_validar_operacao(
         operacao.get("id_operacao"),
         operacao.get("eleitor"),
         operacao.get("opcao"),
@@ -406,7 +406,7 @@ def testar_replicacao():
     }
 
     # Armazena a operacao no lider
-    sucesso, mensagem = persistencia.salvar_operacao_pendente(
+    sucesso, mensagem = persistencia.salvar_ou_validar_operacao(
         operacao["id_operacao"],
         operacao["eleitor"],
         operacao["opcao"],
