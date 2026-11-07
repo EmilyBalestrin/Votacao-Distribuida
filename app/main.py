@@ -10,6 +10,7 @@ from flask import request
 from relogio_lamport import RelogioLamport
 from persistencia import Persistencia
 from replicacao import enviar_operacao
+from recuperacao import coletar_estados
 
 app = Flask(__name__)
 
@@ -644,6 +645,40 @@ def testar_quorum():
         "quorum_obtido": quorum_obtido,
         "respostas": respostas
     }), 200
+
+
+@app.route("/recuperacao/consultar", methods=["GET"])
+def consultar_estado_distribuido():
+    estado_eleicao = eleicao.obter_estado()
+
+    # Somente o lider identificado inicia a coleta
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider identificado",
+            "lider_conhecido": estado_eleicao["lider"]
+        }), 409
+
+    resultado = coletar_estados(
+        ID_NO,
+        ENDERECOS_NOS,
+        persistencia
+    )
+
+    maioria = len(ENDERECOS_NOS) // 2 + 1
+
+    resultado["maioria_necessaria"] = maioria
+    resultado["maioria_consultada"] = (
+        resultado["nos_consultados"] >= maioria
+    )
+
+    print(
+        f"[Recuperacao] No {ID_NO}: "
+        f"{resultado['nos_consultados']} "
+        f"de {resultado['total_nos']} estados coletados",
+        flush=True
+    )
+
+    return jsonify(resultado)
 
 
 if __name__ == "__main__":
