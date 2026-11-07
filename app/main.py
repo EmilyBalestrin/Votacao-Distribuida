@@ -719,6 +719,86 @@ def consultar_resultados():
         "resultados": resultados["resultados"]
     })
 
+
+@app.route("/votar", methods=["POST"])
+def receber_solicitacao_voto():
+    dados = request.get_json(silent=True)
+
+    if not isinstance(dados, dict):
+        return jsonify({
+            "erro": "Envie um objeto JSON valido"
+        }), 400
+
+    eleitor = dados.get("eleitor")
+    opcao = dados.get("opcao")
+
+    # Valida os dados recebidos
+    if not isinstance(eleitor, str) or not eleitor.strip():
+        return jsonify({
+            "erro": "Identificador do eleitor invalido"
+        }), 400
+
+    if opcao not in ("python", "java", "javascript"):
+        return jsonify({
+            "erro": "Opcao de voto invalida"
+        }), 400
+
+    eleitor = eleitor.strip()
+
+    # Consulta o lider identificado pelo Bully
+    estado_eleicao = eleicao.obter_estado()
+    lider = estado_eleicao["lider"]
+
+    if lider not in ENDERECOS_NOS:
+        return jsonify({
+            "erro": "Lider indisponivel no momento"
+        }), 503
+
+    # Se este no nao e o lider, encaminha o pedido
+    if lider != ID_NO:
+        try:
+            resposta = requests.post(
+                f"{ENDERECOS_NOS[lider]}/votar",
+                json={
+                    "eleitor": eleitor,
+                    "opcao": opcao
+                },
+                timeout=5
+            )
+
+            return (
+                resposta.content,
+                resposta.status_code,
+                {
+                    "Content-Type": resposta.headers.get(
+                        "Content-Type", "application/json"
+                    )
+                }
+            )
+
+        except requests.RequestException:
+            return jsonify({
+                "erro": "Nao foi possivel contactar o lider",
+                "lider_conhecido": lider
+            }), 503
+
+    # O pedido chegou ao lider.
+    # Ainda nao registra nem confirma o voto.
+    print(
+        f"[Votacao] No {ID_NO} recebeu pedido "
+        f"do eleitor {eleitor}: {opcao}",
+        flush=True
+    )
+
+    return jsonify({
+        "status": "recebido_para_teste",
+        "mensagem": "Solicitacao recebida pelo lider",
+        "lider": ID_NO,
+        "eleitor": eleitor,
+        "opcao": opcao,
+        "voto_registrado": False
+    }), 202
+
 if __name__ == "__main__":
     monitor.iniciar()
 
