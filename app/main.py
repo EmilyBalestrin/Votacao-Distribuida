@@ -10,8 +10,7 @@ from flask import request
 from relogio_lamport import RelogioLamport
 from persistencia import Persistencia
 from replicacao import enviar_operacao
-from recuperacao import coletar_estados
-
+from recuperacao import coletar_estados, comparar_estados
 app = Flask(__name__)
 
 ID_NO = int(os.getenv("NODE_ID", "1"))
@@ -680,6 +679,35 @@ def consultar_estado_distribuido():
 
     return jsonify(resultado)
 
+
+@app.route("/recuperacao/comparar", methods=["GET"])
+def comparar_operacoes_distribuidas():
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider identificado",
+            "lider_conhecido": estado_eleicao["lider"]
+        }), 409
+
+    coleta = coletar_estados(
+        ID_NO,
+        ENDERECOS_NOS,
+        persistencia
+    )
+
+    comparacao = comparar_estados(coleta)
+
+    maioria = len(ENDERECOS_NOS) // 2 + 1
+
+    return jsonify({
+        "no": ID_NO,
+        "nos_consultados": coleta["nos_consultados"],
+        "maioria_consultada": (
+            coleta["nos_consultados"] >= maioria
+        ),
+        "comparacao": comparacao
+    })
 
 if __name__ == "__main__":
     monitor.iniciar()
