@@ -720,6 +720,7 @@ def consultar_resultados():
     })
 
 
+
 @app.route("/votar", methods=["POST"])
 def receber_solicitacao_voto():
     dados = request.get_json(silent=True)
@@ -782,16 +783,10 @@ def receber_solicitacao_voto():
                 "lider_conhecido": lider
             }), 503
 
-    # O pedido chegou ao lider.
-    # Ainda nao registra nem confirma o voto.
-    print(
-        f"[Votacao] No {ID_NO} recebeu pedido "
-        f"do eleitor {eleitor}: {opcao}",
-        flush=True
-    )
-
     # O pedido chegou ao lider identificado pelo Bully
     mandato = persistencia.obter_mandato()
+
+    # Cria e armazena a operacao pendente no lider
     sucesso, mensagem, operacao = (
         persistencia.criar_operacao_voto(
             eleitor,
@@ -811,18 +806,42 @@ def receber_solicitacao_voto():
             "lider": ID_NO
         }), 409
 
+    # Replica a operacao para os demais servidores
+    resultados_replicacao = enviar_operacao(
+        ID_NO,
+        ENDERECOS_NOS,
+        operacao
+    )
+
+    # Conta quantos servidores armazenaram a operacao
+    replicas_ok = sum(
+        1
+        for resultado in resultados_replicacao.values()
+        if resultado["sucesso"]
+    )
+
+    total_nos = len(ENDERECOS_NOS)
+
+    # Inclui a copia armazenada no proprio lider
+    total_copias = replicas_ok + 1
+
+    replicacao_completa = total_copias == total_nos
+
     print(
-        f"[Votacao] No {ID_NO} criou operacao "
-        f"{operacao['id_operacao']} "
-        f"na sequencia {operacao['sequencia']}",
+        f"[Votacao] Operacao {operacao['id_operacao']} "
+        f"armazenada em {total_copias}/{total_nos} nos",
         flush=True
     )
 
     return jsonify({
         "status": "pendente",
-        "mensagem": "Operacao armazenada no lider",
+        "mensagem": "Operacao criada e replicacao realizada",
         "lider": ID_NO,
         "operacao": operacao,
+        "replicacao_completa": replicacao_completa,
+        "copias_armazenadas": total_copias,
+        "total_nos": total_nos,
+        "replicas": resultados_replicacao,
         "voto_confirmado": False
     }), 202
 
