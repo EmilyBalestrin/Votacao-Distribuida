@@ -450,6 +450,94 @@ def listar_operacoes():
         "operacoes": persistencia.consultar_operacoes()
     })
 
+@app.route("/autorizacao", methods=["GET"])
+def consultar_autorizacao():
+    return jsonify({
+        "no": ID_NO,
+        "autorizacao": persistencia.consultar_autorizacao()
+    })
+
+
+@app.route("/autorizacao/solicitar", methods=["POST"])
+def solicitar_autorizacao():
+    dados = request.get_json(silent=True) or {}
+
+    candidato = dados.get("candidato")
+    mandato = dados.get("mandato")
+
+    if (
+        type(candidato) is not int
+        or candidato not in ENDERECOS_NOS
+        or type(mandato) is not int
+        or mandato <= 0
+    ):
+        return jsonify({
+            "erro": "Dados de autorizacao invalidos"
+        }), 400
+
+    sucesso, mensagem = persistencia.registrar_autorizacao(
+        mandato,
+        candidato
+    )
+
+    estado = persistencia.consultar_autorizacao()
+
+    print(
+        f"[Autorizacao] No {ID_NO}: "
+        f"proposta ({mandato}, {candidato}) - {mensagem}",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "autorizado": sucesso,
+        "mensagem": mensagem,
+        "maior_proposta": estado
+    }), 200 if sucesso else 409
+
+@app.route("/autorizacao/enviar/<int:id_destino>", methods=["POST"])
+def enviar_autorizacao(id_destino):
+    if id_destino not in ENDERECOS_NOS or id_destino == ID_NO:
+        return jsonify({
+            "erro": "Destino invalido"
+        }), 400
+
+    dados = request.get_json(silent=True) or {}
+    mandato = dados.get("mandato")
+
+    if type(mandato) is not int or mandato <= 0:
+        return jsonify({
+            "erro": "Mandato invalido"
+        }), 400
+
+    try:
+        resposta = requests.post(
+            f"{ENDERECOS_NOS[id_destino]}/autorizacao/solicitar",
+            json={
+                "candidato": ID_NO,
+                "mandato": mandato
+            },
+            timeout=3
+        )
+
+        return jsonify({
+            "origem": ID_NO,
+            "destino": id_destino,
+            "codigo_http": resposta.status_code,
+            "resposta": resposta.json()
+        }), resposta.status_code
+
+    except (requests.RequestException, ValueError) as erro:
+        print(
+            f"[Autorizacao] Falha na comunicacao: {erro}",
+            flush=True
+        )
+
+        return jsonify({
+            "erro": "Nao foi possivel consultar o destino",
+            "destino": id_destino
+        }), 503
+
 if __name__ == "__main__":
     monitor.iniciar()
 
