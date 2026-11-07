@@ -41,6 +41,23 @@ class Persistencia:
                     )
                 """)
 
+            conexao.execute("""
+                            CREATE TABLE IF NOT EXISTS operacoes
+                            (id_operacao TEXT PRIMARY KEY,
+                            eleitor TEXT NOT NULL,
+                            opcao TEXT NOT NULL,
+                            mandato INTEGER NOT NULL,
+                            sequencia INTEGER NOT NULL,
+                            estado TEXT NOT NULL DEFAULT 'pendente',
+
+                            CHECK (opcao IN ('python', 'java','javascript')),
+                            CHECK(mandato >= 0),
+                            CHECK(sequencia > 0),
+                            CHECK(estado IN ('pendente','confirmada')),
+                            UNIQUE(mandato, sequencia)
+                                )
+                            """)
+
     def obter_mandato(self):
         with self.lock:
             with self.conectar() as conexao:
@@ -67,7 +84,7 @@ class Persistencia:
                 ).fetchone()
 
                 return resultado[0]
-    
+
     def salvar_voto(self, eleitor, opcao):
         if not isinstance(eleitor, str) or not eleitor.strip():
             return False, "Identificador do eleitor invalido"
@@ -112,3 +129,79 @@ class Persistencia:
             "total_votos": sum(resultados.values()),
             "resultados": resultados
         }
+
+
+    def salvar_operacao_pendente(
+        self,
+        id_operacao,
+        eleitor,
+        opcao,
+        mandato,
+        sequencia
+    ):
+        if (
+            not isinstance(id_operacao, str)
+            or not id_operacao.strip()
+            or not isinstance(eleitor, str)
+            or not eleitor.strip()
+            or opcao not in ("python", "java", "javascript")
+            or type(mandato) is not int
+            or mandato < 0
+            or type(sequencia) is not int
+            or sequencia <= 0
+        ):
+            return False, "Dados da operacao invalidos"
+
+        with self.lock:
+            try:
+                with self.conectar() as conexao:
+                    conexao.execute("""
+                        INSERT INTO operacoes (
+                            id_operacao,
+                            eleitor,
+                            opcao,
+                            mandato,
+                            sequencia,
+                            estado
+                        )
+                        VALUES (?, ?, ?, ?, ?, 'pendente')
+                    """, (
+                        id_operacao,
+                        eleitor.strip(),
+                        opcao,
+                        mandato,
+                        sequencia
+                    ))
+
+                return True, "Operacao pendente armazenada"
+
+            except sqlite3.IntegrityError:
+                return False, "Operacao duplicada ou conflitante"
+
+
+    def consultar_operacoes(self):
+        with self.lock:
+            with self.conectar() as conexao:
+                registros = conexao.execute("""
+                    SELECT
+                        id_operacao,
+                        eleitor,
+                        opcao,
+                        mandato,
+                        sequencia,
+                        estado
+                    FROM operacoes
+                    ORDER BY mandato, sequencia
+                """).fetchall()
+
+        return [
+            {
+                "id_operacao": registro[0],
+                "eleitor": registro[1],
+                "opcao": registro[2],
+                "mandato": registro[3],
+                "sequencia": registro[4],
+                "estado": registro[5]
+            }
+            for registro in registros
+        ]
