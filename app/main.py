@@ -709,6 +709,16 @@ def comparar_operacoes_distribuidas():
         "comparacao": comparacao
     })
 
+@app.route("/resultados", methods=["GET"])
+def consultar_resultados():
+    resultados = persistencia.consultar_votos()
+
+    return jsonify({
+        "no": ID_NO,
+        "total_votos": resultados["total_votos"],
+        "resultados": resultados["resultados"]
+    })
+
 if __name__ == "__main__":
     monitor.iniciar()
 
