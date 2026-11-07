@@ -790,13 +790,40 @@ def receber_solicitacao_voto():
         flush=True
     )
 
+    # O pedido chegou ao lider identificado pelo Bully
+    mandato = persistencia.obter_mandato()
+    sucesso, mensagem, operacao = (
+        persistencia.criar_operacao_voto(
+            eleitor,
+            opcao,
+            mandato
+        )
+    )
+
+    if not sucesso:
+        print(
+            f"[Votacao] Pedido rejeitado: {mensagem}",
+            flush=True
+        )
+
+        return jsonify({
+            "erro": mensagem,
+            "lider": ID_NO
+        }), 409
+
+    print(
+        f"[Votacao] No {ID_NO} criou operacao "
+        f"{operacao['id_operacao']} "
+        f"na sequencia {operacao['sequencia']}",
+        flush=True
+    )
+
     return jsonify({
-        "status": "recebido_para_teste",
-        "mensagem": "Solicitacao recebida pelo lider",
+        "status": "pendente",
+        "mensagem": "Operacao armazenada no lider",
         "lider": ID_NO,
-        "eleitor": eleitor,
-        "opcao": opcao,
-        "voto_registrado": False
+        "operacao": operacao,
+        "voto_confirmado": False
     }), 202
 
 if __name__ == "__main__":

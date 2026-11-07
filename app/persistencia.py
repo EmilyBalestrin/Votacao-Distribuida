@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import threading
+import uuid
 
 
 class Persistencia:
@@ -374,3 +375,94 @@ class Persistencia:
             return True, "Operacao ja armazenada anteriormente"
 
         return False, "Conflito nos dados da operacao"
+
+
+    def criar_operacao_voto(self, eleitor, opcao, mandato):
+        if not isinstance(eleitor, str) or not eleitor.strip():
+            return False, "Identificador do eleitor invalido", None
+
+        if opcao not in ("python", "java", "javascript"):
+            return False, "Opcao de voto invalida", None
+
+        if type(mandato) is not int or mandato < 0:
+            return False, "Mandato invalido", None
+
+        eleitor = eleitor.strip()
+
+        with self.lock:
+            try:
+                with self.conectar() as conexao:
+                    conexao.execute("BEGIN IMMEDIATE")
+
+                    # Verifica se o eleitor ja possui voto confirmado
+                    voto_existente = conexao.execute("""
+                        SELECT 1
+                        FROM votos
+                        WHERE eleitor = ?
+                    """, (eleitor,)).fetchone()
+
+                    if voto_existente is not None:
+                        return (
+                            False,
+                            "Este eleitor ja possui voto confirmado",
+                            None
+                        )
+
+                    # Verifica operacoes anteriores do eleitor
+                    operacao_existente = conexao.execute("""
+                        SELECT 1
+                        FROM operacoes
+                        WHERE eleitor = ?
+                        LIMIT 1
+                    """, (eleitor,)).fetchone()
+
+                    if operacao_existente is not None:
+                        return (
+                            False,
+                            "Este eleitor ja possui uma operacao",
+                            None
+                        )
+
+                    # Descobre a proxima sequencia no mandato
+                    resultado = conexao.execute("""
+                        SELECT COALESCE(MAX(sequencia), 0)
+                        FROM operacoes
+                        WHERE mandato = ?
+                    """, (mandato,)).fetchone()
+
+                    sequencia = resultado[0] + 1
+
+                    # Gera um identificador unico
+                    id_operacao = str(uuid.uuid4())
+
+                    conexao.execute("""
+                        INSERT INTO operacoes (
+                            id_operacao,
+                            eleitor,
+                            opcao,
+                            mandato,
+                            sequencia,
+                            estado
+                        )
+                        VALUES (?, ?, ?, ?, ?, 'pendente')
+                    """, (
+                        id_operacao,
+                        eleitor,
+                        opcao,
+                        mandato,
+                        sequencia
+                    ))
+
+                operacao = {
+                    "id_operacao": id_operacao,
+                    "eleitor": eleitor,
+                    "opcao": opcao,
+                    "mandato": mandato,
+                    "sequencia": sequencia,
+                    "estado": "pendente"
+                }
+
+                return True, "Operacao criada", operacao
+
+            except sqlite3.IntegrityError:
+                return False, "Conflito ao criar operacao", None
