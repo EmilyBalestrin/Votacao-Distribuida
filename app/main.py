@@ -9,6 +9,7 @@ import requests
 from flask import request
 from relogio_lamport import RelogioLamport
 from persistencia import Persistencia
+from replicacao import enviar_operacao
 
 app = Flask(__name__)
 
@@ -323,6 +324,130 @@ def consultar_mandato():
     return jsonify({
         "no": ID_NO,
         "mandato": persistencia.obter_mandato()
+    })
+
+
+@app.route("/replicacao/receber", methods=["POST"])
+def receber_operacao():
+    dados = request.get_json(silent=True) or {}
+
+    origem = dados.get("origem")
+    operacao = dados.get("operacao")
+
+    if (
+        type(origem) is not int
+        or origem not in ENDERECOS_NOS
+        or origem == ID_NO
+        or not isinstance(operacao, dict)
+    ):
+        return jsonify({
+            "erro": "Mensagem de replicacao invalida"
+        }), 400
+
+    # Verificacao preliminar do lider conhecido
+    lider_conhecido = eleicao.obter_estado()["lider"]
+
+    if lider_conhecido != origem:
+        return jsonify({
+            "erro": "Origem nao corresponde ao lider conhecido"
+        }), 409
+
+    sucesso, mensagem = persistencia.salvar_operacao_pendente(
+        operacao.get("id_operacao"),
+        operacao.get("eleitor"),
+        operacao.get("opcao"),
+        operacao.get("mandato"),
+        operacao.get("sequencia")
+    )
+
+    if not sucesso:
+        return jsonify({
+            "no": ID_NO,
+            "erro": mensagem
+        }), 409
+
+    print(
+        f"[Replicacao] No {ID_NO} armazenou "
+        f"operacao {operacao['id_operacao']}",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "status": "pendente",
+        "id_operacao": operacao["id_operacao"]
+    }), 200
+
+
+@app.route("/replicacao/teste", methods=["POST"])
+def testar_replicacao():
+    dados = request.get_json(silent=True) or {}
+
+    # Apenas o lider conhecido pode iniciar o teste
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider",
+            "lider_conhecido": estado_eleicao["lider"]
+        }), 409
+
+    id_operacao = dados.get("id_operacao")
+    eleitor = dados.get("eleitor")
+    opcao = dados.get("opcao")
+    sequencia = dados.get("sequencia")
+
+    operacao = {
+        "id_operacao": id_operacao,
+        "eleitor": eleitor,
+        "opcao": opcao,
+        "mandato": persistencia.obter_mandato(),
+        "sequencia": sequencia
+    }
+
+    # Armazena a operacao no lider
+    sucesso, mensagem = persistencia.salvar_operacao_pendente(
+        operacao["id_operacao"],
+        operacao["eleitor"],
+        operacao["opcao"],
+        operacao["mandato"],
+        operacao["sequencia"]
+    )
+
+    if not sucesso:
+        return jsonify({
+            "erro": mensagem
+        }), 409
+
+    # Envia aos outros servidores
+    resultados = enviar_operacao(
+        ID_NO,
+        ENDERECOS_NOS,
+        operacao
+    )
+
+    replicas_ok = sum(
+        1 for resultado in resultados.values()
+        if resultado["sucesso"]
+    )
+
+    replicacao_completa = (
+        replicas_ok == len(ENDERECOS_NOS) - 1
+    )
+
+    return jsonify({
+        "origem": ID_NO,
+        "id_operacao": id_operacao,
+        "estado": "pendente",
+        "replicacao_completa": replicacao_completa,
+        "replicas": resultados
+    }), 200 if replicacao_completa else 503
+
+@app.route("/operacoes", methods=["GET"])
+def listar_operacoes():
+    return jsonify({
+        "no": ID_NO,
+        "operacoes": persistencia.consultar_operacoes()
     })
 
 if __name__ == "__main__":
