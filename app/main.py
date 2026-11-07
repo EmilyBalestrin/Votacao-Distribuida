@@ -538,6 +538,114 @@ def enviar_autorizacao(id_destino):
             "destino": id_destino
         }), 503
 
+
+@app.route("/autorizacao/quorum/teste", methods=["POST"])
+def testar_quorum():
+    dados = request.get_json(silent=True) or {}
+    mandato = dados.get("mandato")
+
+    if type(mandato) is not int or mandato <= 0:
+        return jsonify({
+            "erro": "Mandato invalido"
+        }), 400
+
+    # Somente o lider identificado pelo Bully inicia este teste
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider identificado",
+            "lider_conhecido": estado_eleicao["lider"]
+        }), 409
+
+    # Calcula a maioria necessaria
+    total_nos = len(ENDERECOS_NOS)
+    maioria = total_nos // 2 + 1
+
+    autorizacoes = 0
+    respostas = {}
+
+    # Primeiro registra a propria promessa
+    sucesso_local, mensagem_local = (
+        persistencia.registrar_autorizacao(
+            mandato, ID_NO
+        )
+    )
+
+    respostas[str(ID_NO)] = {
+        "autorizado": sucesso_local,
+        "mensagem": mensagem_local
+    }
+
+    if sucesso_local:
+        autorizacoes += 1
+
+    # Envia a mesma proposta aos outros nos
+    for id_destino, endereco in ENDERECOS_NOS.items():
+
+        if id_destino == ID_NO:
+            continue
+
+        try:
+            resposta = requests.post(
+                f"{endereco}/autorizacao/solicitar",
+                json={
+                    "mandato": mandato,
+                    "candidato": ID_NO
+                },
+                timeout=3
+            )
+
+            conteudo = resposta.json()
+
+            # Confere se a resposta corresponde
+            # exatamente a proposta solicitada
+            proposta = conteudo.get("maior_proposta", {})
+
+            autorizado = (
+                resposta.status_code == 200
+                and conteudo.get("autorizado") is True
+                and proposta.get("mandato") == mandato
+                and proposta.get("candidato") == ID_NO
+            )
+
+            respostas[str(id_destino)] = {
+                "autorizado": autorizado,
+                "codigo_http": resposta.status_code,
+                "mensagem": conteudo.get("mensagem")
+            }
+
+            if autorizado:
+                autorizacoes += 1
+
+        except (requests.RequestException, ValueError) as erro:
+            respostas[str(id_destino)] = {
+                "autorizado": False,
+                "erro": str(erro)
+            }
+
+    quorum_obtido = autorizacoes >= maioria
+
+    print(
+        f"[Quorum] Proposta ({mandato}, {ID_NO}): "
+        f"{autorizacoes}/{total_nos} autorizacoes",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "proposta": {
+            "mandato": mandato,
+            "candidato": ID_NO
+        },
+        "total_nos": total_nos,
+        "maioria_necessaria": maioria,
+        "autorizacoes": autorizacoes,
+        "quorum_obtido": quorum_obtido,
+        "respostas": respostas
+    }), 200
+
+
 if __name__ == "__main__":
     monitor.iniciar()
 
