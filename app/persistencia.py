@@ -58,6 +58,22 @@ class Persistencia:
                                 )
                             """)
 
+            conexao.execute("""
+                    CREATE TABLE IF NOT EXISTS autorizacao_lider
+                    (id INTEGER PRIMARY KEY CHECK
+                    (id = 1),
+                    mandato INTEGER NOT NULL DEFAULT 0,
+                    candidato INTEGER NOT NULL DEFAULT 0
+                        )
+                    """)
+
+            conexao.execute("""
+                    INSERT OR IGNORE INTO autorizacao_lider
+                    (id, mandato, candidato)
+                    VALUES (1, 0, 0)
+                    """)
+
+
     def obter_mandato(self):
         with self.lock:
             with self.conectar() as conexao:
@@ -262,6 +278,66 @@ class Persistencia:
 
             except sqlite3.OperationalError as erro:
                 return False, f"Erro no banco de dados: {erro}"
+
+    def consultar_autorizacao(self):
+        with self.lock:
+            with self.conectar() as conexao:
+                resultado = conexao.execute("""
+                    SELECT mandato, candidato
+                    FROM autorizacao_lider
+                    WHERE id = 1
+                """).fetchone()
+
+        return {
+            "mandato": resultado[0],
+            "candidato": resultado[1]
+        }
+
+
+    def registrar_autorizacao(self, mandato, candidato):
+        if (
+            type(mandato) is not int
+            or mandato <= 0
+            or type(candidato) is not int
+            or candidato <= 0
+        ):
+            return False, "Dados de autorizacao invalidos"
+
+        with self.lock:
+            with self.conectar() as conexao:
+                conexao.execute("BEGIN IMMEDIATE")
+
+                registro = conexao.execute("""
+                    SELECT mandato, candidato
+                    FROM autorizacao_lider
+                    WHERE id = 1
+                """).fetchone()
+
+                mandato_atual, candidato_atual = registro
+
+                proposta_atual = (
+                    mandato_atual,
+                    candidato_atual
+                )
+
+                nova_proposta = (
+                    mandato,
+                    candidato
+                )
+
+                if nova_proposta < proposta_atual:
+                    return False, "Proposta de lideranca antiga"
+
+                if nova_proposta == proposta_atual:
+                    return True, "Autorizacao ja registrada"
+
+                conexao.execute("""
+                    UPDATE autorizacao_lider
+                    SET mandato = ?, candidato = ?
+                    WHERE id = 1
+                """, (mandato, candidato))
+
+        return True, "Autorizacao registrada"
 
 ##metodo para salvar ou validar uma operação, garantindo que não haja duplicidade ou conflito de dados - idempotência
     def salvar_ou_validar_operacao(
