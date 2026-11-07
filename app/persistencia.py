@@ -206,6 +206,63 @@ class Persistencia:
             for registro in registros
         ]
 
+
+    def confirmar_operacao_local(self, id_operacao):
+        if not isinstance(id_operacao, str) or not id_operacao.strip():
+            return False, "Identificador da operacao invalido"
+
+        with self.lock:
+            try:
+                with self.conectar() as conexao:
+                    # Bloqueia outras escritas durante esta transacao
+                    conexao.execute("BEGIN IMMEDIATE")
+
+                    operacao = conexao.execute("""
+                        SELECT eleitor, opcao, estado
+                        FROM operacoes
+                        WHERE id_operacao = ?
+                    """, (id_operacao,)).fetchone()
+
+                    if operacao is None:
+                        return False, "Operacao nao encontrada"
+
+                    eleitor, opcao, estado = operacao
+
+                    # Verifica uma confirmacao repetida
+                    if estado == "confirmada":
+                        voto = conexao.execute("""
+                            SELECT opcao
+                            FROM votos
+                            WHERE eleitor = ?
+                        """, (eleitor,)).fetchone()
+
+                        if voto is not None and voto[0] == opcao:
+                            return True, "Operacao ja confirmada"
+
+                        return False, "Inconsistencia nos dados do voto"
+
+                    # Registra o voto na contagem oficial
+                    conexao.execute("""
+                        INSERT INTO votos (eleitor, opcao)
+                        VALUES (?, ?)
+                    """, (eleitor, opcao))
+
+                    # Atualiza o estado da operacao
+                    conexao.execute("""
+                        UPDATE operacoes
+                        SET estado = 'confirmada'
+                        WHERE id_operacao = ?
+                          AND estado = 'pendente'
+                    """, (id_operacao,))
+
+                return True, "Operacao confirmada localmente"
+
+            except sqlite3.IntegrityError:
+                return False, "Eleitor ja possui voto registrado"
+
+            except sqlite3.OperationalError as erro:
+                return False, f"Erro no banco de dados: {erro}"
+
 ##metodo para salvar ou validar uma operação, garantindo que não haja duplicidade ou conflito de dados - idempotência
     def salvar_ou_validar_operacao(
         self, id_operacao, eleitor, opcao, mandato, sequencia
