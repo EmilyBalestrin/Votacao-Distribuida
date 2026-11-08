@@ -721,6 +721,7 @@ def consultar_resultados():
 
 
 
+
 @app.route("/votar", methods=["POST"])
 def receber_solicitacao_voto():
     dados = request.get_json(silent=True)
@@ -733,7 +734,7 @@ def receber_solicitacao_voto():
     eleitor = dados.get("eleitor")
     opcao = dados.get("opcao")
 
-    # Valida os dados recebidos
+    # Valida os dados do eleitor
     if not isinstance(eleitor, str) or not eleitor.strip():
         return jsonify({
             "erro": "Identificador do eleitor invalido"
@@ -746,16 +747,16 @@ def receber_solicitacao_voto():
 
     eleitor = eleitor.strip()
 
-    # Consulta o lider identificado pelo Bully
+    # Identifica o lider pelo Bully
     estado_eleicao = eleicao.obter_estado()
     lider = estado_eleicao["lider"]
 
     if lider not in ENDERECOS_NOS:
         return jsonify({
-            "erro": "Lider indisponivel no momento"
+            "erro": "Lider indisponivel"
         }), 503
 
-    # Se este no nao e o lider, encaminha o pedido
+    # Encaminha ao lider, se necessario
     if lider != ID_NO:
         try:
             resposta = requests.post(
@@ -764,7 +765,7 @@ def receber_solicitacao_voto():
                     "eleitor": eleitor,
                     "opcao": opcao
                 },
-                timeout=5
+                timeout=15
             )
 
             return (
@@ -783,10 +784,9 @@ def receber_solicitacao_voto():
                 "lider_conhecido": lider
             }), 503
 
-    # O pedido chegou ao lider identificado pelo Bully
+    # O lider cria a operacao pendente
     mandato = persistencia.obter_mandato()
 
-    # Cria e armazena a operacao pendente no lider
     sucesso, mensagem, operacao = (
         persistencia.criar_operacao_voto(
             eleitor,
@@ -796,24 +796,18 @@ def receber_solicitacao_voto():
     )
 
     if not sucesso:
-        print(
-            f"[Votacao] Pedido rejeitado: {mensagem}",
-            flush=True
-        )
-
         return jsonify({
             "erro": mensagem,
             "lider": ID_NO
         }), 409
 
-    # Replica a operacao para os demais servidores
+    # Replica a operacao aos outros servidores
     resultados_replicacao = enviar_operacao(
         ID_NO,
         ENDERECOS_NOS,
         operacao
     )
 
-    # Conta quantos servidores armazenaram a operacao
     replicas_ok = sum(
         1
         for resultado in resultados_replicacao.values()
@@ -821,29 +815,182 @@ def receber_solicitacao_voto():
     )
 
     total_nos = len(ENDERECOS_NOS)
-
-    # Inclui a copia armazenada no proprio lider
     total_copias = replicas_ok + 1
 
-    replicacao_completa = total_copias == total_nos
+    # Nesta versao, exige as tres copias
+    if total_copias != total_nos:
+        return jsonify({
+            "status": "pendente",
+            "mensagem": "Replicacao incompleta",
+            "id_operacao": operacao["id_operacao"],
+            "copias_armazenadas": total_copias,
+            "voto_confirmado": False,
+            "replicas": resultados_replicacao
+        }), 503
+
+    # Envia a confirmacao aos outros servidores
+    confirmacoes = {}
+    todas_confirmadas = True
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.post(
+                f"{endereco}/replicacao/confirmar",
+                json={
+                    "origem": ID_NO,
+                    "id_operacao": operacao["id_operacao"],
+                    "mandato": operacao["mandato"]
+                },
+                timeout=3
+            )
+
+            confirmado = resposta.status_code == 200
+
+            confirmacoes[str(id_no)] = {
+                "confirmado": confirmado,
+                "codigo_http": resposta.status_code
+            }
+
+            if not confirmado:
+                todas_confirmadas = False
+
+        except requests.RequestException as erro:
+            confirmacoes[str(id_no)] = {
+                "confirmado": False,
+                "erro": str(erro)
+            }
+
+            todas_confirmadas = False
+
+    # Se algum servidor falhou, nao confirma no lider
+    if not todas_confirmadas:
+        print(
+            "[Votacao] Confirmacao parcial. "
+            "Operacao exige recuperacao.",
+            flush=True
+        )
+
+        return jsonify({
+            "status": "confirmacao_parcial",
+            "mensagem": (
+                "Nem todos os servidores confirmaram. "
+                "A operacao exige recuperacao."
+            ),
+            "id_operacao": operacao["id_operacao"],
+            "voto_confirmado": False,
+            "confirmacoes": confirmacoes
+        }), 503
+
+    # Confirma a operacao localmente no lider
+    sucesso_local, mensagem_local = (
+        persistencia.confirmar_operacao_local(
+            operacao["id_operacao"]
+        )
+    )
+
+    if not sucesso_local:
+        return jsonify({
+            "status": "confirmacao_parcial",
+            "erro": mensagem_local,
+            "id_operacao": operacao["id_operacao"],
+            "voto_confirmado": False,
+            "confirmacoes": confirmacoes
+        }), 503
 
     print(
-        f"[Votacao] Operacao {operacao['id_operacao']} "
-        f"armazenada em {total_copias}/{total_nos} nos",
+        f"[Votacao] Voto confirmado: "
+        f"{operacao['id_operacao']}",
         flush=True
     )
 
     return jsonify({
-        "status": "pendente",
-        "mensagem": "Operacao criada e replicacao realizada",
+        "status": "confirmado",
+        "mensagem": "Voto confirmado nos tres servidores",
         "lider": ID_NO,
-        "operacao": operacao,
-        "replicacao_completa": replicacao_completa,
-        "copias_armazenadas": total_copias,
-        "total_nos": total_nos,
-        "replicas": resultados_replicacao,
-        "voto_confirmado": False
-    }), 202
+        "id_operacao": operacao["id_operacao"],
+        "eleitor": eleitor,
+        "opcao": opcao,
+        "voto_confirmado": True,
+        "confirmacoes": confirmacoes
+    }), 200
+
+
+@app.route("/replicacao/confirmar", methods=["POST"])
+def receber_confirmacao():
+    dados = request.get_json(silent=True)
+
+    if not isinstance(dados, dict):
+        return jsonify({
+            "erro": "Dados invalidos"
+        }), 400
+
+    origem = dados.get("origem")
+    id_operacao = dados.get("id_operacao")
+    mandato = dados.get("mandato")
+
+    if (
+        type(origem) is not int
+        or origem not in ENDERECOS_NOS
+        or origem == ID_NO
+        or not isinstance(id_operacao, str)
+        or not id_operacao.strip()
+        or type(mandato) is not int
+        or mandato < 0
+    ):
+        return jsonify({
+            "erro": "Solicitacao de confirmacao invalida"
+        }), 400
+
+    # Aceita apenas comandos do lider conhecido
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != origem:
+        return jsonify({
+            "erro": "Origem nao corresponde ao lider conhecido"
+        }), 409
+
+    # Confere se a operacao existe com o mandato informado
+    operacoes = persistencia.consultar_operacoes()
+
+    operacao = next(
+        (
+            item for item in operacoes
+            if item["id_operacao"] == id_operacao
+        ),
+        None
+    )
+
+    if operacao is None:
+        return jsonify({
+            "erro": "Operacao nao encontrada"
+        }), 404
+
+    if operacao["mandato"] != mandato:
+        return jsonify({
+            "erro": "Mandato diferente do registro armazenado"
+        }), 409
+
+    # Executa a confirmacao local em uma transacao SQLite
+    sucesso, mensagem = persistencia.confirmar_operacao_local(
+        id_operacao
+    )
+
+    print(
+        f"[Confirmacao] No {ID_NO}: "
+        f"{id_operacao} - {mensagem}",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "id_operacao": id_operacao,
+        "confirmado": sucesso,
+        "mensagem": mensagem
+    }), 200 if sucesso else 409
+
 
 if __name__ == "__main__":
     monitor.iniciar()
