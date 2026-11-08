@@ -1,16 +1,15 @@
 import os
 
-from flask import Flask, jsonify
 from comunicacao import consultar_no
 from heartbeat import MonitorHeartbeat
 from eleicao import EleicaoBully
 import threading
 import requests
-from flask import request
 from relogio_lamport import RelogioLamport
 from persistencia import Persistencia
 from replicacao import enviar_operacao
 from recuperacao import coletar_estados, comparar_estados
+from flask import Flask, jsonify, request, render_template
 app = Flask(__name__)
 
 ID_NO = int(os.getenv("NODE_ID", "1"))
@@ -991,6 +990,9 @@ def receber_confirmacao():
         "mensagem": mensagem
     }), 200 if sucesso else 409
 
+@app.route("/enquete", methods=["GET"])
+def pagina_enquete():
+    return render_template("enquete.html")
 
 if __name__ == "__main__":
     monitor.iniciar()

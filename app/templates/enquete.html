@@ -1,0 +1,330 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Votação Distribuída</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f3f5f9;
+            color: #263244;
+        }
+
+        .container {
+            max-width: 650px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        .subtitulo {
+            text-align: center;
+            color: #64748b;
+            margin-bottom: 28px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        h2 {
+            font-size: 20px;
+            margin-top: 0;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 7px;
+            margin: 10px 0 18px;
+            font-size: 15px;
+        }
+
+        .opcao {
+            display: block;
+            margin: 14px 0;
+            padding: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 7px;
+            cursor: pointer;
+        }
+
+        .opcao:hover {
+            background: #f8fafc;
+        }
+
+        button {
+            width: 100%;
+            border: none;
+            background: #2563eb;
+            color: white;
+            padding: 13px;
+            border-radius: 7px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        button:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        #mensagem {
+            margin-top: 15px;
+            font-weight: bold;
+        }
+
+        .resultado {
+            margin: 18px 0;
+        }
+
+        .linha {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .barra {
+            background: #e2e8f0;
+            border-radius: 20px;
+            height: 12px;
+            overflow: hidden;
+        }
+
+        .preenchimento {
+            height: 100%;
+            width: 0%;
+            background: #2563eb;
+            transition: width 0.3s;
+        }
+
+        .rodape {
+            text-align: center;
+            color: #64748b;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Sistema de Votação Distribuída</h1>
+        <p class="subtitulo">
+            Escolha sua linguagem de programação favorita!
+        </p>
+
+        <div class="card">
+            <h2>Registrar voto</h2>
+
+            <form id="formVotacao">
+                <label for="eleitor">Identificador do eleitor:</label>
+
+                <input
+                    type="text"
+                    id="eleitor"
+                    placeholder="Ex.: eleitor001"
+                    required
+                >
+
+                <p>Selecione uma opção:</p>
+
+                <label class="opcao">
+                    <input type="radio" name="opcao" value="python" required>
+                    Python
+                </label>
+
+                <label class="opcao">
+                    <input type="radio" name="opcao" value="java">
+                    Java
+                </label>
+
+                <label class="opcao">
+                    <input type="radio" name="opcao" value="javascript">
+                    JavaScript
+                </label>
+
+                <button type="submit" id="botaoVotar">
+                    Registrar voto
+                </button>
+            </form>
+
+            <p id="mensagem" role="status" aria-live="polite"></p>
+        </div>
+
+        <div class="card">
+            <h2>Resultados da votação</h2>
+
+            <p>
+                Total de votos:
+                <strong id="totalVotos">0</strong>
+            </p>
+
+            <div class="resultado">
+                <div class="linha">
+                    <span>Python</span>
+                    <span id="votosPython">0</span>
+                </div>
+                <div class="barra">
+                    <div class="preenchimento" id="barraPython"></div>
+                </div>
+            </div>
+
+            <div class="resultado">
+                <div class="linha">
+                    <span>Java</span>
+                    <span id="votosJava">0</span>
+                </div>
+                <div class="barra">
+                    <div class="preenchimento" id="barraJava"></div>
+                </div>
+            </div>
+
+            <div class="resultado">
+                <div class="linha">
+                    <span>JavaScript</span>
+                    <span id="votosJavaScript">0</span>
+                </div>
+                <div class="barra">
+                    <div class="preenchimento" id="barraJavaScript"></div>
+                </div>
+            </div>
+
+            <button type="button" onclick="carregarResultados()">
+                Atualizar resultados
+            </button>
+        </div>
+
+        <p class="rodape">
+            Projeto acadêmico de Sistemas Distribuídos
+        </p>
+    </div>
+
+    <script>
+        const formulario = document.getElementById("formVotacao");
+        const mensagem = document.getElementById("mensagem");
+        const botaoVotar = document.getElementById("botaoVotar");
+
+        formulario.addEventListener("submit", async function(evento) {
+            evento.preventDefault();
+
+            const eleitor = document.getElementById("eleitor").value.trim();
+            const selecionada = document.querySelector(
+                'input[name="opcao"]:checked'
+            );
+
+            if (!eleitor || !selecionada) {
+                mensagem.textContent = "Preencha todos os campos.";
+                return;
+            }
+
+            botaoVotar.disabled = true;
+            mensagem.textContent = "Enviando voto...";
+
+            try {
+                const resposta = await fetch("/votar", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        eleitor: eleitor,
+                        opcao: selecionada.value
+                    })
+                });
+
+                const dados = await resposta.json();
+
+                if (resposta.ok && dados.voto_confirmado === true) {
+                    mensagem.textContent = "Voto confirmado com sucesso!";
+                    mensagem.style.color = "green";
+
+                    formulario.reset();
+                    await carregarResultados();
+                } else {
+                    mensagem.textContent =
+                        dados.erro || dados.mensagem ||
+                        "Nao foi possivel confirmar o voto.";
+                    mensagem.style.color = "#b45309";
+                }
+            } catch (erro) {
+                mensagem.textContent =
+                    "Erro de comunicacao. Consulte o estado do voto antes de tentar novamente.";
+                mensagem.style.color = "#b91c1c";
+            } finally {
+                botaoVotar.disabled = false;
+            }
+        });
+
+        async function carregarResultados() {
+            try {
+                const resposta = await fetch("/resultados");
+
+                if (!resposta.ok) {
+                    throw new Error("Erro ao consultar resultados");
+                }
+
+                const dados = await resposta.json();
+                const total = dados.total_votos;
+                const resultados = dados.resultados;
+
+                document.getElementById("totalVotos").textContent = total;
+
+                atualizarBarra(
+                    "Python", resultados.python, total
+                );
+
+                atualizarBarra(
+                    "Java", resultados.java, total
+                );
+
+                atualizarBarra(
+                    "JavaScript", resultados.javascript, total
+                );
+            } catch (erro) {
+                console.error("Erro ao carregar resultados:", erro);
+                mensagem.textContent =
+                    "Nao foi possivel atualizar os resultados.";
+                mensagem.style.color = "#b91c1c";
+            }
+        }
+
+        function atualizarBarra(nome, quantidade, total) {
+            const percentual = total > 0
+                ? (quantidade / total) * 100
+                : 0;
+
+            document.getElementById(
+                "votos" + nome
+            ).textContent = quantidade;
+
+            document.getElementById(
+                "barra" + nome
+            ).style.width = percentual + "%";
+        }
+
+        carregarResultados();
+    </script>
+</body>
+</html>
