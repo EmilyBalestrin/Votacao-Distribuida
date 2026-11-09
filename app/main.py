@@ -1423,14 +1423,6 @@ def verificar_quorum_votacao():
 )
 def sincronizar_operacao_confirmada(id_operacao):
 
-    # Somente o lider identificado pode iniciar este teste
-    estado_eleicao = eleicao.obter_estado()
-
-    if estado_eleicao["lider"] != ID_NO:
-        return jsonify({
-            "erro": "Este no nao e o lider"
-        }), 409
-
     # Consulta as operacoes dos outros dois servidores
     copias = []
 
@@ -1609,14 +1601,6 @@ def sincronizar_operacao_confirmada(id_operacao):
 )
 def sincronizar_operacoes_confirmadas():
 
-    # Apenas o lider identificado inicia a recuperacao
-    estado_eleicao = eleicao.obter_estado()
-
-    if estado_eleicao["lider"] != ID_NO:
-        return jsonify({
-            "erro": "Este no nao e o lider"
-        }), 409
-
     # Coleta os estados dos tres servidores
     coleta = coletar_estados(
         ID_NO,
@@ -1733,19 +1717,13 @@ def monitorar_recuperacao_automatica():
         time.sleep(10)
 
         try:
-            # Somente o lider identificado realiza a recuperacao
-            estado_eleicao = eleicao.obter_estado()
-
-            if estado_eleicao["lider"] != ID_NO:
-                continue
-
-            # Neste primeiro teste, exige os tres nos ativos
+            # Verifica se todos os servidores estao ativos
             quorum = verificar_maioria_ativa()
 
             if len(quorum["nos_ativos"]) != len(ENDERECOS_NOS):
                 continue
 
-            # Reutiliza a rota de recuperacao em lote
+            # Cada servidor recupera seu proprio banco
             resposta = requests.post(
                 f"http://127.0.0.1:{PORTA}/recuperacao/sincronizar-confirmadas",
                 timeout=30
@@ -1753,14 +1731,19 @@ def monitorar_recuperacao_automatica():
 
             if resposta.status_code != 200:
                 print(
-                    "[Recuperacao automatica] Falha: "
+                    f"[Recuperacao automatica] No {ID_NO}: "
                     f"HTTP {resposta.status_code}",
                     flush=True
                 )
                 continue
 
             dados = resposta.json()
-            quantidade = dados.get("operacoes_recuperadas", 0)
+
+            quantidade = dados.get(
+                "operacoes_recuperadas", 0
+            )
+
+            falhas = dados.get("falhas", [])
 
             if quantidade > 0:
                 print(
@@ -1769,11 +1752,21 @@ def monitorar_recuperacao_automatica():
                     flush=True
                 )
 
+            if falhas:
+                print(
+                    f"[Recuperacao automatica] No {ID_NO}: "
+                    f"{len(falhas)} operacao(oes) "
+                    "precisam de verificacao",
+                    flush=True
+                )
+
         except (requests.RequestException, ValueError) as erro:
             print(
-                f"[Recuperacao automatica] Erro: {erro}",
+                f"[Recuperacao automatica] No {ID_NO}: "
+                f"Erro: {erro}",
                 flush=True
             )
+
 
 
 if __name__ == "__main__":
