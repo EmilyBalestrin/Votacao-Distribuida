@@ -10,6 +10,8 @@ from persistencia import Persistencia
 from replicacao import enviar_operacao
 from recuperacao import coletar_estados, comparar_estados
 from flask import Flask, jsonify, request, render_template
+import threading
+import time
 app = Flask(__name__)
 
 ID_NO = int(os.getenv("NODE_ID", "1"))
@@ -1724,6 +1726,56 @@ def sincronizar_operacoes_confirmadas():
         "falhas": falhas
     }), 200 if not falhas else 409
 
+
+def monitorar_recuperacao_automatica():
+    while True:
+        # Intervalo entre as verificacoes
+        time.sleep(10)
+
+        try:
+            # Somente o lider identificado realiza a recuperacao
+            estado_eleicao = eleicao.obter_estado()
+
+            if estado_eleicao["lider"] != ID_NO:
+                continue
+
+            # Neste primeiro teste, exige os tres nos ativos
+            quorum = verificar_maioria_ativa()
+
+            if len(quorum["nos_ativos"]) != len(ENDERECOS_NOS):
+                continue
+
+            # Reutiliza a rota de recuperacao em lote
+            resposta = requests.post(
+                f"http://127.0.0.1:{PORTA}/recuperacao/sincronizar-confirmadas",
+                timeout=30
+            )
+
+            if resposta.status_code != 200:
+                print(
+                    "[Recuperacao automatica] Falha: "
+                    f"HTTP {resposta.status_code}",
+                    flush=True
+                )
+                continue
+
+            dados = resposta.json()
+            quantidade = dados.get("operacoes_recuperadas", 0)
+
+            if quantidade > 0:
+                print(
+                    f"[Recuperacao automatica] No {ID_NO}: "
+                    f"{quantidade} voto(s) recuperado(s)",
+                    flush=True
+                )
+
+        except (requests.RequestException, ValueError) as erro:
+            print(
+                f"[Recuperacao automatica] Erro: {erro}",
+                flush=True
+            )
+
+
 if __name__ == "__main__":
     monitor.iniciar()
 
@@ -1732,6 +1784,13 @@ if __name__ == "__main__":
         5,
         eleicao.iniciar_em_thread
     ).start()
+
+    monitor_recuperacao = threading.Thread(
+        target=monitorar_recuperacao_automatica,
+        daemon=True
+    )
+
+    monitor_recuperacao.start()
 
     app.run(
         host="0.0.0.0",
