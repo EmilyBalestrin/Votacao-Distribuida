@@ -994,6 +994,123 @@ def receber_confirmacao():
 def pagina_enquete():
     return render_template("enquete.html")
 
+
+@app.route(
+    "/recuperacao/sincronizar-pendente/<id_operacao>",
+    methods=["POST"]
+)
+def sincronizar_operacao_pendente(id_operacao):
+
+    # Nesta etapa, a sincronizacao sera iniciada
+    # somente pelo lider identificado pelo Bully.
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider"
+        }), 409
+
+    # Consulta os outros servidores
+    copias = []
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.get(
+                f"{endereco}/operacoes",
+                timeout=3
+            )
+
+            resposta.raise_for_status()
+            dados = resposta.json()
+
+            if dados.get("no") != id_no:
+                return jsonify({
+                    "erro": "Resposta de servidor inesperado"
+                }), 409
+
+            operacao = next(
+                (
+                    item for item in dados["operacoes"]
+                    if item["id_operacao"] == id_operacao
+                ),
+                None
+            )
+
+            if operacao is not None:
+                copias.append(operacao)
+
+        except (requests.RequestException, ValueError, KeyError):
+            return jsonify({
+                "erro": "Falha ao consultar os servidores"
+            }), 503
+
+    # Exige duas copias para este teste de recuperacao
+    if len(copias) != 2:
+        return jsonify({
+            "erro": "Nao foram encontradas duas copias"
+        }), 409
+
+    primeira, segunda = copias
+
+    # As duas copias precisam ser identicas
+    if primeira != segunda:
+        return jsonify({
+            "erro": "As copias apresentam divergencias"
+        }), 409
+
+    if primeira["estado"] != "pendente":
+        return jsonify({
+            "erro": "Recuperacao aceita apenas operacoes pendentes"
+        }), 409
+
+    # Impede conflito com registros ja existentes
+    operacoes_locais = persistencia.consultar_operacoes()
+
+    for existente in operacoes_locais:
+        mesmo_id = (
+            existente["id_operacao"] == id_operacao
+        )
+
+        mesma_posicao = (
+            existente["mandato"] == primeira["mandato"]
+            and existente["sequencia"] == primeira["sequencia"]
+        )
+
+        mesmo_eleitor = (
+            existente["eleitor"] == primeira["eleitor"]
+        )
+
+        if (mesma_posicao or mesmo_eleitor) and not mesmo_id:
+            return jsonify({
+                "erro": "Conflito com operacao local existente"
+            }), 409
+
+    sucesso, mensagem = (
+        persistencia.salvar_ou_validar_operacao(
+            primeira["id_operacao"],
+            primeira["eleitor"],
+            primeira["opcao"],
+            primeira["mandato"],
+            primeira["sequencia"]
+        )
+    )
+
+    if not sucesso:
+        return jsonify({
+            "erro": mensagem
+        }), 409
+
+    return jsonify({
+        "no": ID_NO,
+        "id_operacao": id_operacao,
+        "status": "pendente",
+        "mensagem": "Operacao sincronizada com sucesso"
+    }), 200
+
+
 if __name__ == "__main__":
     monitor.iniciar()
 
