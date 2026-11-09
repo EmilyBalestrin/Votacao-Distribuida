@@ -1415,6 +1415,315 @@ def verificar_quorum_votacao():
     })
 
 
+@app.route(
+    "/recuperacao/sincronizar-confirmada/<id_operacao>",
+    methods=["POST"]
+)
+def sincronizar_operacao_confirmada(id_operacao):
+
+    # Somente o lider identificado pode iniciar este teste
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider"
+        }), 409
+
+    # Consulta as operacoes dos outros dois servidores
+    copias = []
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.get(
+                f"{endereco}/operacoes",
+                timeout=3
+            )
+
+            resposta.raise_for_status()
+            dados = resposta.json()
+
+            if (
+                dados.get("no") != id_no
+                or not isinstance(dados.get("operacoes"), list)
+            ):
+                return jsonify({
+                    "erro": "Resposta de servidor invalida"
+                }), 409
+
+            operacao = next(
+                (
+                    op for op in dados["operacoes"]
+                    if op.get("id_operacao") == id_operacao
+                ),
+                None
+            )
+
+            if operacao is None:
+                return jsonify({
+                    "erro": "Operacao ausente em uma replica",
+                    "no": id_no
+                }), 409
+
+            copias.append(operacao)
+
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError
+        ):
+            return jsonify({
+                "erro": "Falha ao consultar as replicas"
+            }), 503
+
+    # Exige duas copias confirmadas
+    if len(copias) != 2:
+        return jsonify({
+            "erro": "Duas copias sao necessarias"
+        }), 409
+
+    primeira, segunda = copias
+
+    if primeira != segunda:
+        return jsonify({
+            "erro": "As replicas possuem dados diferentes"
+        }), 409
+
+    if primeira["estado"] != "confirmada":
+        return jsonify({
+            "erro": "A operacao ainda nao foi confirmada"
+        }), 409
+
+    # Verifica conflitos com operacoes locais
+    operacoes_locais = persistencia.consultar_operacoes()
+
+    for existente in operacoes_locais:
+        if existente["id_operacao"] == id_operacao:
+
+            campos = (
+                "eleitor",
+                "opcao",
+                "mandato",
+                "sequencia"
+            )
+
+            if any(
+                existente[campo] != primeira[campo]
+                for campo in campos
+            ):
+                return jsonify({
+                    "erro": "Conflito com operacao local"
+                }), 409
+
+            continue
+
+        if existente["eleitor"] == primeira["eleitor"]:
+            return jsonify({
+                "erro": "Outra operacao existe para o eleitor"
+            }), 409
+
+        if (
+            existente["mandato"] == primeira["mandato"]
+            and existente["sequencia"] == primeira["sequencia"]
+        ):
+            return jsonify({
+                "erro": "Conflito na posicao da operacao"
+            }), 409
+
+    # Verifica se ja existe voto local para o eleitor
+    with persistencia.lock:
+        with persistencia.conectar() as conexao:
+            voto_existente = conexao.execute("""
+                SELECT opcao
+                FROM votos
+                WHERE eleitor = ?
+            """, (primeira["eleitor"],)).fetchone()
+
+    if voto_existente is not None:
+        operacao_local = next(
+            (
+                op for op in operacoes_locais
+                if op["id_operacao"] == id_operacao
+            ),
+            None
+        )
+
+        if (
+            operacao_local is None
+            or operacao_local["estado"] != "confirmada"
+            or voto_existente[0] != primeira["opcao"]
+        ):
+            return jsonify({
+                "erro": "Conflito com voto local existente"
+            }), 409
+
+    # Armazena a operacao, se ainda nao existir
+    sucesso, mensagem = (
+        persistencia.salvar_ou_validar_operacao(
+            primeira["id_operacao"],
+            primeira["eleitor"],
+            primeira["opcao"],
+            primeira["mandato"],
+            primeira["sequencia"]
+        )
+    )
+
+    if not sucesso:
+        return jsonify({
+            "erro": mensagem
+        }), 409
+
+    # Confirma a operacao localmente
+    sucesso, mensagem = (
+        persistencia.confirmar_operacao_local(
+            id_operacao
+        )
+    )
+
+    if not sucesso:
+        return jsonify({
+            "erro": mensagem
+        }), 409
+
+    print(
+        f"[Recuperacao] No {ID_NO} recuperou "
+        f"voto confirmado {id_operacao}",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "id_operacao": id_operacao,
+        "status": "confirmada",
+        "mensagem": "Voto confirmado recuperado com sucesso"
+    }), 200
+
+
+@app.route(
+    "/recuperacao/sincronizar-confirmadas",
+    methods=["POST"]
+)
+def sincronizar_operacoes_confirmadas():
+
+    # Apenas o lider identificado inicia a recuperacao
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider"
+        }), 409
+
+    # Coleta os estados dos tres servidores
+    coleta = coletar_estados(
+        ID_NO,
+        ENDERECOS_NOS,
+        persistencia
+    )
+
+    # Para este procedimento controlado,
+    # precisamos consultar os tres nos
+    if coleta["nos_consultados"] != len(ENDERECOS_NOS):
+        return jsonify({
+            "erro": "Todos os nos devem estar disponiveis",
+            "detalhes": coleta["erros"]
+        }), 503
+
+    # Identifica os dois outros servidores
+    outros_nos = [
+        str(id_no)
+        for id_no in ENDERECOS_NOS
+        if id_no != ID_NO
+    ]
+
+    primeiro_no, segundo_no = outros_nos
+
+    operacoes_primeiro = {
+        op["id_operacao"]: op
+        for op in coleta["estados"][primeiro_no]
+    }
+
+    operacoes_segundo = {
+        op["id_operacao"]: op
+        for op in coleta["estados"][segundo_no]
+    }
+
+    operacoes_locais = {
+        op["id_operacao"]: op
+        for op in coleta["estados"][str(ID_NO)]
+    }
+
+    # Seleciona operacoes confirmadas e identicas
+    # que ainda nao estao confirmadas localmente
+    candidatos = []
+
+    for id_operacao, primeira in operacoes_primeiro.items():
+
+        segunda = operacoes_segundo.get(id_operacao)
+
+        if segunda is None:
+            continue
+
+        if primeira != segunda:
+            continue
+
+        if primeira["estado"] != "confirmada":
+            continue
+
+        local = operacoes_locais.get(id_operacao)
+
+        if local is not None and local["estado"] == "confirmada":
+            continue
+
+        candidatos.append(primeira)
+
+    # Recupera na ordem original das operacoes
+    candidatos.sort(
+        key=lambda op: (
+            op["mandato"],
+            op["sequencia"],
+            op["id_operacao"]
+        )
+    )
+
+    recuperadas = []
+    falhas = []
+
+    # Reutiliza a rota individual ja testada
+    for operacao in candidatos:
+        id_operacao = operacao["id_operacao"]
+
+        resposta, codigo = sincronizar_operacao_confirmada(
+            id_operacao
+        )
+
+        dados = resposta.get_json()
+
+        if codigo == 200:
+            recuperadas.append(id_operacao)
+        else:
+            falhas.append({
+                "id_operacao": id_operacao,
+                "codigo_http": codigo,
+                "detalhes": dados
+            })
+
+    print(
+        f"[Recuperacao] No {ID_NO}: "
+        f"{len(recuperadas)} operacoes recuperadas, "
+        f"{len(falhas)} falhas",
+        flush=True
+    )
+
+    return jsonify({
+        "no": ID_NO,
+        "operacoes_identificadas": len(candidatos),
+        "operacoes_recuperadas": len(recuperadas),
+        "recuperadas": recuperadas,
+        "falhas": falhas
+    }), 200 if not falhas else 409
+
 if __name__ == "__main__":
     monitor.iniciar()
 
