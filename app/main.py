@@ -1295,6 +1295,57 @@ def finalizar_operacao_recuperada(id_operacao):
     }), 200
 
 
+@app.route("/votacao/quorum", methods=["GET"])
+def verificar_quorum_votacao():
+    nos_ativos = [ID_NO]
+    nos_indisponiveis = []
+
+    # Consulta os demais servidores
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.get(
+                f"{endereco}/status",
+                timeout=2
+            )
+
+            if resposta.status_code == 200:
+                dados = resposta.json()
+
+                # Confere se o servidor respondeu
+                # com o identificador esperado
+                if dados.get("no") == id_no:
+                    nos_ativos.append(id_no)
+                else:
+                    nos_indisponiveis.append(id_no)
+            else:
+                nos_indisponiveis.append(id_no)
+
+        except (requests.RequestException, ValueError):
+            nos_indisponiveis.append(id_no)
+
+    total_nos = len(ENDERECOS_NOS)
+    maioria_necessaria = total_nos // 2 + 1
+
+    quorum_disponivel = (
+        len(nos_ativos) >= maioria_necessaria
+    )
+
+    estado_eleicao = eleicao.obter_estado()
+
+    return jsonify({
+        "no": ID_NO,
+        "lider_conhecido": estado_eleicao["lider"],
+        "total_nos": total_nos,
+        "maioria_necessaria": maioria_necessaria,
+        "nos_ativos": sorted(nos_ativos),
+        "nos_indisponiveis": sorted(nos_indisponiveis),
+        "quorum_disponivel": quorum_disponivel
+    })
+
+
 if __name__ == "__main__":
     monitor.iniciar()
 
