@@ -720,6 +720,36 @@ def consultar_resultados():
 
 
 
+def verificar_maioria_ativa():
+    nos_ativos = [ID_NO]
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.get(
+                f"{endereco}/status",
+                timeout=2
+            )
+
+            if resposta.status_code == 200:
+                dados = resposta.json()
+
+                if dados.get("no") == id_no:
+                    nos_ativos.append(id_no)
+
+        except (requests.RequestException, ValueError):
+            pass
+
+    total_nos = len(ENDERECOS_NOS)
+    maioria = total_nos // 2 + 1
+
+    return {
+        "nos_ativos": sorted(nos_ativos),
+        "maioria_necessaria": maioria,
+        "quorum_disponivel": len(nos_ativos) >= maioria
+    }
 
 @app.route("/votar", methods=["POST"])
 def receber_solicitacao_voto():
@@ -782,6 +812,21 @@ def receber_solicitacao_voto():
                 "erro": "Nao foi possivel contactar o lider",
                 "lider_conhecido": lider
             }), 503
+
+    # Verifica se existe maioria antes de criar a operacao
+    quorum = verificar_maioria_ativa()
+
+    if not quorum["quorum_disponivel"]:
+        return jsonify({
+            "status": "sem_quorum",
+            "mensagem": (
+                "Votacao temporariamente indisponivel. "
+                "Nao ha servidores suficientes."
+            ),
+            "lider": ID_NO,
+            "nos_ativos": quorum["nos_ativos"],
+            "voto_confirmado": False
+        }), 503
 
     # O lider cria a operacao pendente
     mandato = persistencia.obter_mandato()
