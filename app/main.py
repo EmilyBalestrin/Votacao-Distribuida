@@ -1111,6 +1111,190 @@ def sincronizar_operacao_pendente(id_operacao):
     }), 200
 
 
+
+@app.route(
+    "/recuperacao/finalizar/<id_operacao>",
+    methods=["POST"]
+)
+def finalizar_operacao_recuperada(id_operacao):
+
+    # Apenas o lider conhecido inicia a recuperacao
+    estado_eleicao = eleicao.obter_estado()
+
+    if estado_eleicao["lider"] != ID_NO:
+        return jsonify({
+            "erro": "Este no nao e o lider"
+        }), 409
+
+    # Consulta as operacoes dos tres servidores
+    estados = {}
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            operacoes = persistencia.consultar_operacoes()
+        else:
+            try:
+                resposta = requests.get(
+                    f"{endereco}/operacoes",
+                    timeout=3
+                )
+                resposta.raise_for_status()
+                dados = resposta.json()
+
+                if (
+                    dados.get("no") != id_no
+                    or not isinstance(dados.get("operacoes"), list)
+                ):
+                    return jsonify({
+                        "erro": "Resposta de servidor invalida"
+                    }), 409
+
+                operacoes = dados["operacoes"]
+
+            except (requests.RequestException, ValueError):
+                return jsonify({
+                    "erro": "Todos os nos devem estar disponiveis"
+                }), 503
+
+        estados[id_no] = operacoes
+
+    # Localiza a operacao em cada servidor
+    copias = {}
+
+    for id_no, operacoes in estados.items():
+        encontrada = next(
+            (
+                op for op in operacoes
+                if op["id_operacao"] == id_operacao
+            ),
+            None
+        )
+
+        if encontrada is None:
+            return jsonify({
+                "erro": "Operacao ausente em um dos nos",
+                "no": id_no
+            }), 409
+
+        copias[id_no] = encontrada
+
+    # Confere os dados da operacao
+    campos = (
+        "id_operacao",
+        "eleitor",
+        "opcao",
+        "mandato",
+        "sequencia"
+    )
+
+    referencia = tuple(
+        copias[ID_NO][campo] for campo in campos
+    )
+
+    for copia in copias.values():
+        dados_copia = tuple(
+            copia[campo] for campo in campos
+        )
+
+        if dados_copia != referencia:
+            return jsonify({
+                "erro": "Operacoes divergentes entre os nos"
+            }), 409
+
+        if copia["estado"] not in (
+            "pendente", "confirmada"
+        ):
+            return jsonify({
+                "erro": "Estado de operacao invalido"
+            }), 409
+
+    # Evita confirmar operacoes concorrentes
+    eleitor = copias[ID_NO]["eleitor"]
+    mandato = copias[ID_NO]["mandato"]
+    sequencia = copias[ID_NO]["sequencia"]
+
+    for operacoes in estados.values():
+        for op in operacoes:
+            if op["id_operacao"] == id_operacao:
+                continue
+
+            if op["eleitor"] == eleitor:
+                return jsonify({
+                    "erro": "Outra operacao existe para o eleitor"
+                }), 409
+
+            if (
+                op["mandato"] == mandato
+                and op["sequencia"] == sequencia
+            ):
+                return jsonify({
+                    "erro": "Conflito na posicao da operacao"
+                }), 409
+
+    # Solicita confirmacao aos outros nos
+    confirmacoes = {}
+
+    for id_no, endereco in ENDERECOS_NOS.items():
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.post(
+                f"{endereco}/replicacao/confirmar",
+                json={
+                    "origem": ID_NO,
+                    "id_operacao": id_operacao,
+                    "mandato": mandato
+                },
+                timeout=3
+            )
+
+            dados = resposta.json()
+
+            if (
+                resposta.status_code != 200
+                or dados.get("confirmado") is not True
+            ):
+                return jsonify({
+                    "status": "confirmacao_parcial",
+                    "erro": "Falha ao confirmar em uma replica",
+                    "no": id_no,
+                    "confirmacoes": confirmacoes
+                }), 503
+
+            confirmacoes[str(id_no)] = True
+
+        except (requests.RequestException, ValueError):
+            return jsonify({
+                "status": "confirmacao_parcial",
+                "erro": "Falha na comunicacao",
+                "no": id_no,
+                "confirmacoes": confirmacoes
+            }), 503
+
+    # Confirma no banco local do lider
+    sucesso, mensagem = (
+        persistencia.confirmar_operacao_local(
+            id_operacao
+        )
+    )
+
+    if not sucesso:
+        return jsonify({
+            "status": "confirmacao_parcial",
+            "erro": mensagem,
+            "confirmacoes": confirmacoes
+        }), 503
+
+    return jsonify({
+        "status": "confirmado",
+        "mensagem": "Operacao finalizada nos tres nos",
+        "id_operacao": id_operacao,
+        "lider": ID_NO,
+        "voto_confirmado": True
+    }), 200
+
+
 if __name__ == "__main__":
     monitor.iniciar()
 
