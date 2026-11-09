@@ -751,6 +751,7 @@ def verificar_maioria_ativa():
         "quorum_disponivel": len(nos_ativos) >= maioria
     }
 
+
 @app.route("/votar", methods=["POST"])
 def receber_solicitacao_voto():
     dados = request.get_json(silent=True)
@@ -763,7 +764,6 @@ def receber_solicitacao_voto():
     eleitor = dados.get("eleitor")
     opcao = dados.get("opcao")
 
-    # Valida os dados do eleitor
     if not isinstance(eleitor, str) or not eleitor.strip():
         return jsonify({
             "erro": "Identificador do eleitor invalido"
@@ -776,7 +776,7 @@ def receber_solicitacao_voto():
 
     eleitor = eleitor.strip()
 
-    # Identifica o lider pelo Bully
+    # Identifica o lider pelo algoritmo Bully
     estado_eleicao = eleicao.obter_estado()
     lider = estado_eleicao["lider"]
 
@@ -785,7 +785,7 @@ def receber_solicitacao_voto():
             "erro": "Lider indisponivel"
         }), 503
 
-    # Encaminha ao lider, se necessario
+    # Encaminha ao lider quando necessario
     if lider != ID_NO:
         try:
             resposta = requests.post(
@@ -794,7 +794,7 @@ def receber_solicitacao_voto():
                     "eleitor": eleitor,
                     "opcao": opcao
                 },
-                timeout=15
+                timeout=20
             )
 
             return (
@@ -813,22 +813,49 @@ def receber_solicitacao_voto():
                 "lider_conhecido": lider
             }), 503
 
-    # Verifica se existe maioria antes de criar a operacao
+    # Verifica se existe maioria de servidores ativos
     quorum = verificar_maioria_ativa()
+    nos_ativos = quorum["nos_ativos"]
+    maioria = quorum["maioria_necessaria"]
 
     if not quorum["quorum_disponivel"]:
         return jsonify({
             "status": "sem_quorum",
-            "mensagem": (
-                "Votacao temporariamente indisponivel. "
-                "Nao ha servidores suficientes."
-            ),
-            "lider": ID_NO,
-            "nos_ativos": quorum["nos_ativos"],
+            "mensagem": "Servidores insuficientes para votar",
+            "nos_ativos": nos_ativos,
             "voto_confirmado": False
         }), 503
 
-    # O lider cria a operacao pendente
+    # Verificacao preliminar:
+    # os nos ativos precisam reconhecer este lider
+    for id_no in nos_ativos:
+        if id_no == ID_NO:
+            continue
+
+        try:
+            resposta = requests.get(
+                f"{ENDERECOS_NOS[id_no]}/lider",
+                timeout=3
+            )
+
+            resposta.raise_for_status()
+            estado_remoto = resposta.json()
+
+            if estado_remoto.get("lider") != ID_NO:
+                return jsonify({
+                    "status": "lideranca_instavel",
+                    "mensagem": "Os servidores nao concordam sobre o lider",
+                    "voto_confirmado": False
+                }), 503
+
+        except (requests.RequestException, ValueError):
+            return jsonify({
+                "status": "lideranca_instavel",
+                "mensagem": "Falha ao verificar a lideranca",
+                "voto_confirmado": False
+            }), 503
+
+    # Cria a operacao pendente no lider
     mandato = persistencia.obter_mandato()
 
     sucesso, mensagem, operacao = (
@@ -845,40 +872,39 @@ def receber_solicitacao_voto():
             "lider": ID_NO
         }), 409
 
-    # Replica a operacao aos outros servidores
+    # Replica a operacao
     resultados_replicacao = enviar_operacao(
         ID_NO,
         ENDERECOS_NOS,
         operacao
     )
 
-    replicas_ok = sum(
-        1
-        for resultado in resultados_replicacao.values()
-        if resultado["sucesso"]
-    )
+    # O lider ja possui uma copia local
+    total_copias = 1
+    replicas_aceitas = []
 
-    total_nos = len(ENDERECOS_NOS)
-    total_copias = replicas_ok + 1
+    for id_no, resultado in resultados_replicacao.items():
+        if resultado["sucesso"]:
+            total_copias += 1
+            replicas_aceitas.append(int(id_no))
 
-    # Nesta versao, exige as tres copias
-    if total_copias != total_nos:
+    # Exige pelo menos duas copias, incluindo o lider
+    if total_copias < maioria:
         return jsonify({
             "status": "pendente",
-            "mensagem": "Replicacao incompleta",
+            "mensagem": "Nao foi possivel obter maioria de replicas",
             "id_operacao": operacao["id_operacao"],
             "copias_armazenadas": total_copias,
-            "voto_confirmado": False,
-            "replicas": resultados_replicacao
+            "voto_confirmado": False
         }), 503
 
-    # Envia a confirmacao aos outros servidores
+    # Solicita confirmacao somente as replicas
+    # que armazenaram a operacao
     confirmacoes = {}
-    todas_confirmadas = True
+    total_confirmacoes = 0
 
-    for id_no, endereco in ENDERECOS_NOS.items():
-        if id_no == ID_NO:
-            continue
+    for id_no in replicas_aceitas:
+        endereco = ENDERECOS_NOS[id_no]
 
         try:
             resposta = requests.post(
@@ -891,44 +917,39 @@ def receber_solicitacao_voto():
                 timeout=3
             )
 
-            confirmado = resposta.status_code == 200
+            dados_resposta = resposta.json()
+
+            confirmado = (
+                resposta.status_code == 200
+                and dados_resposta.get("confirmado") is True
+            )
 
             confirmacoes[str(id_no)] = {
                 "confirmado": confirmado,
                 "codigo_http": resposta.status_code
             }
 
-            if not confirmado:
-                todas_confirmadas = False
+            if confirmado:
+                total_confirmacoes += 1
 
-        except requests.RequestException as erro:
+        except (requests.RequestException, ValueError) as erro:
             confirmacoes[str(id_no)] = {
                 "confirmado": False,
                 "erro": str(erro)
             }
 
-            todas_confirmadas = False
-
-    # Se algum servidor falhou, nao confirma no lider
-    if not todas_confirmadas:
-        print(
-            "[Votacao] Confirmacao parcial. "
-            "Operacao exige recuperacao.",
-            flush=True
-        )
-
+    # O lider so confirma localmente quando pelo menos
+    # outro servidor respondeu positivamente
+    if total_confirmacoes + 1 < maioria:
         return jsonify({
             "status": "confirmacao_parcial",
-            "mensagem": (
-                "Nem todos os servidores confirmaram. "
-                "A operacao exige recuperacao."
-            ),
+            "mensagem": "Nao foi possivel obter maioria na confirmacao",
             "id_operacao": operacao["id_operacao"],
             "voto_confirmado": False,
             "confirmacoes": confirmacoes
         }), 503
 
-    # Confirma a operacao localmente no lider
+    # Confirma no proprio banco do lider
     sucesso_local, mensagem_local = (
         persistencia.confirmar_operacao_local(
             operacao["id_operacao"]
@@ -944,23 +965,26 @@ def receber_solicitacao_voto():
             "confirmacoes": confirmacoes
         }), 503
 
+    total_confirmacoes += 1
+
     print(
-        f"[Votacao] Voto confirmado: "
-        f"{operacao['id_operacao']}",
+        f"[Votacao] Operacao {operacao['id_operacao']} "
+        f"confirmada em {total_confirmacoes}/{len(ENDERECOS_NOS)} nos",
         flush=True
     )
 
     return jsonify({
         "status": "confirmado",
-        "mensagem": "Voto confirmado nos tres servidores",
+        "mensagem": "Voto confirmado no teste de maioria",
         "lider": ID_NO,
         "id_operacao": operacao["id_operacao"],
         "eleitor": eleitor,
         "opcao": opcao,
+        "nos_confirmados": total_confirmacoes,
+        "maioria_necessaria": maioria,
         "voto_confirmado": True,
         "confirmacoes": confirmacoes
     }), 200
-
 
 @app.route("/replicacao/confirmar", methods=["POST"])
 def receber_confirmacao():
