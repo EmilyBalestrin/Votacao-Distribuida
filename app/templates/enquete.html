@@ -125,6 +125,32 @@
             color: #64748b;
             font-size: 13px;
         }
+
+
+.status-votacao {
+    padding: 14px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.status-votacao.verificando {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.status-votacao.disponivel {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #86efac;
+}
+
+.status-votacao.suspensa {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+}
     </style>
 </head>
 
@@ -135,10 +161,17 @@
             Escolha sua linguagem de programação favorita!
         </p>
 
-        <div class="card">
+       <div class="card">
             <h2>Registrar voto</h2>
 
-            <form id="formVotacao">
+        <div id="statusVotacao"
+            class="status-votacao verificando"
+            role="status"
+            aria-live="polite">
+            Verificando disponibilidade da votação...
+        </div>
+
+        <form id="formVotacao">
                 <label for="eleitor">Identificador do eleitor:</label>
 
                 <input
@@ -165,8 +198,8 @@
                     JavaScript
                 </label>
 
-                <button type="submit" id="botaoVotar">
-                    Registrar voto
+               <button type="submit" id="botaoVotar" disabled>
+                   Verificando disponibilidade...
                 </button>
             </form>
 
@@ -221,110 +254,212 @@
         </p>
     </div>
 
-    <script>
-        const formulario = document.getElementById("formVotacao");
-        const mensagem = document.getElementById("mensagem");
-        const botaoVotar = document.getElementById("botaoVotar");
 
-        formulario.addEventListener("submit", async function(evento) {
-            evento.preventDefault();
+<script>
+    const formulario = document.getElementById("formVotacao");
+    const mensagem = document.getElementById("mensagem");
+    const botaoVotar = document.getElementById("botaoVotar");
+    const statusVotacao = document.getElementById("statusVotacao");
 
-            const eleitor = document.getElementById("eleitor").value.trim();
-            const selecionada = document.querySelector(
-                'input[name="opcao"]:checked'
+    let votacaoDisponivel = false;
+    let votacaoEmAndamento = false;
+
+    // Atualiza a mensagem e o botao da interface
+
+function atualizarInterface(disponivel, texto) {
+    votacaoDisponivel = disponivel;
+
+    botaoVotar.disabled = !disponivel || votacaoEmAndamento;
+
+    if (disponivel) {
+        // Votacao funcionando normalmente
+        botaoVotar.textContent = "Registrar voto";
+
+        // Esconde a mensagem de disponibilidade
+        statusVotacao.style.display = "none";
+
+    } else {
+        // Votacao temporariamente suspensa
+        botaoVotar.textContent = "Votação indisponível";
+
+        statusVotacao.style.display = "block";
+        statusVotacao.className = "status-votacao suspensa";
+        statusVotacao.textContent = texto;
+    }
+}
+
+    // Consulta a disponibilidade dos servidores
+    async function verificarDisponibilidade() {
+        try {
+            const resposta = await fetch("/votacao/quorum", {
+                cache: "no-store",
+                signal: AbortSignal.timeout(8000)
+            });
+
+            if (!resposta.ok) {
+                throw new Error("Falha ao consultar quorum");
+            }
+
+            const dados = await resposta.json();
+
+            const disponivel = (
+                dados.quorum_disponivel === true &&
+                [1, 2, 3].includes(dados.lider_conhecido)
             );
 
-            if (!eleitor || !selecionada) {
-                mensagem.textContent = "Preencha todos os campos.";
-                return;
+            if (disponivel) {
+                atualizarInterface(
+                    true,
+                    "Votação disponível. " +
+                    dados.nos_ativos.length +
+                    " de " + dados.total_nos +
+                    " servidores ativos."
+                );
+            } else {
+                atualizarInterface(
+                    false,
+                    "Votação temporariamente suspensa. " +
+                    "Não há servidores suficientes ou " +
+                    "a liderança está indisponível. " +
+                    "Aguarde a recuperação do sistema."
+                );
             }
 
-            botaoVotar.disabled = true;
-            mensagem.textContent = "Enviando voto...";
+        } catch (erro) {
+            atualizarInterface(
+                false,
+                "Não foi possível verificar a disponibilidade. " +
+                "A votação ficará suspensa até que " +
+                "a comunicação seja restabelecida."
+            );
+        }
+    }
 
-            try {
-                const resposta = await fetch("/votar", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        eleitor: eleitor,
-                        opcao: selecionada.value
-                    })
-                });
+    // Verificacao periodica, sem sobrepor requisicoes
+    async function monitorarDisponibilidade() {
+        await verificarDisponibilidade();
 
-                const dados = await resposta.json();
+        setTimeout(monitorarDisponibilidade, 5000);
+    }
 
-                if (resposta.ok && dados.voto_confirmado === true) {
-                    mensagem.textContent = "Voto confirmado com sucesso!";
-                    mensagem.style.color = "green";
+    // Envio do voto
+    formulario.addEventListener("submit", async function(evento) {
+        evento.preventDefault();
 
-                    formulario.reset();
-                    await carregarResultados();
-                } else {
-                    mensagem.textContent =
-                        dados.erro || dados.mensagem ||
-                        "Nao foi possivel confirmar o voto.";
-                    mensagem.style.color = "#b45309";
-                }
-            } catch (erro) {
-                mensagem.textContent =
-                    "Erro de comunicacao. Consulte o estado do voto antes de tentar novamente.";
-                mensagem.style.color = "#b91c1c";
-            } finally {
-                botaoVotar.disabled = false;
-            }
-        });
-
-        async function carregarResultados() {
-            try {
-                const resposta = await fetch("/resultados");
-
-                if (!resposta.ok) {
-                    throw new Error("Erro ao consultar resultados");
-                }
-
-                const dados = await resposta.json();
-                const total = dados.total_votos;
-                const resultados = dados.resultados;
-
-                document.getElementById("totalVotos").textContent = total;
-
-                atualizarBarra(
-                    "Python", resultados.python, total
-                );
-
-                atualizarBarra(
-                    "Java", resultados.java, total
-                );
-
-                atualizarBarra(
-                    "JavaScript", resultados.javascript, total
-                );
-            } catch (erro) {
-                console.error("Erro ao carregar resultados:", erro);
-                mensagem.textContent =
-                    "Nao foi possivel atualizar os resultados.";
-                mensagem.style.color = "#b91c1c";
-            }
+        if (!votacaoDisponivel || votacaoEmAndamento) {
+            return;
         }
 
-        function atualizarBarra(nome, quantidade, total) {
-            const percentual = total > 0
-                ? (quantidade / total) * 100
-                : 0;
+        const eleitor = document.getElementById("eleitor").value.trim();
+        const selecionada = document.querySelector(
+            'input[name="opcao"]:checked'
+        );
 
-            document.getElementById(
-                "votos" + nome
-            ).textContent = quantidade;
-
-            document.getElementById(
-                "barra" + nome
-            ).style.width = percentual + "%";
+        if (!eleitor || !selecionada) {
+            mensagem.textContent = "Preencha todos os campos.";
+            mensagem.style.color = "#b91c1c";
+            return;
         }
 
-        carregarResultados();
-    </script>
+        votacaoEmAndamento = true;
+        botaoVotar.disabled = true;
+        botaoVotar.textContent = "Enviando voto...";
+
+        mensagem.textContent = "";
+
+        try {
+            const resposta = await fetch("/votar", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    eleitor: eleitor,
+                    opcao: selecionada.value
+                })
+            });
+
+            const dados = await resposta.json();
+
+            if (resposta.ok && dados.voto_confirmado === true) {
+                mensagem.textContent = "Voto confirmado com sucesso!";
+                mensagem.style.color = "green";
+
+                formulario.reset();
+                await carregarResultados();
+            } else {
+                mensagem.textContent =
+                    dados.erro ||
+                    dados.mensagem ||
+                    "Não foi possível confirmar o voto.";
+
+                mensagem.style.color = "#b45309";
+            }
+
+        } catch (erro) {
+            mensagem.textContent =
+                "Erro de comunicação. Consulte o estado " +
+                "do voto antes de tentar novamente.";
+
+            mensagem.style.color = "#b91c1c";
+
+        } finally {
+            votacaoEmAndamento = false;
+
+            botaoVotar.disabled = !votacaoDisponivel;
+
+            botaoVotar.textContent = votacaoDisponivel
+                ? "Registrar voto"
+                : "Votação indisponível";
+        }
+    });
+
+    // Consulta os resultados
+    async function carregarResultados() {
+        try {
+            const resposta = await fetch("/resultados", {
+                cache: "no-store"
+            });
+
+            if (!resposta.ok) {
+                throw new Error("Erro ao consultar resultados");
+            }
+
+            const dados = await resposta.json();
+            const total = dados.total_votos;
+            const resultados = dados.resultados;
+
+            document.getElementById("totalVotos").textContent = total;
+
+            atualizarBarra("Python", resultados.python, total);
+            atualizarBarra("Java", resultados.java, total);
+            atualizarBarra("JavaScript", resultados.javascript, total);
+
+        } catch (erro) {
+            console.error("Erro ao carregar resultados:", erro);
+        }
+    }
+
+    function atualizarBarra(nome, quantidade, total) {
+        const percentual = total > 0
+            ? (quantidade / total) * 100
+            : 0;
+
+        document.getElementById(
+            "votos" + nome
+        ).textContent = quantidade;
+
+        document.getElementById(
+            "barra" + nome
+        ).style.width = percentual + "%";
+    }
+
+    // Inicia as consultas
+    carregarResultados();
+    monitorarDisponibilidade();
+
+    // Atualiza resultados periodicamente
+    setInterval(carregarResultados, 10000);
+</script>
 </body>
 </html>
