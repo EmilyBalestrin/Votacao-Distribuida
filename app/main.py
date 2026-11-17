@@ -327,13 +327,13 @@ def consultar_mandato():
         "mandato": persistencia.obter_mandato()
     })
 
-
 @app.route("/replicacao/receber", methods=["POST"])
 def receber_operacao():
     dados = request.get_json(silent=True) or {}
 
     origem = dados.get("origem")
     operacao = dados.get("operacao")
+    timestamp_lamport = dados.get("timestamp_lamport")
 
     if (
         type(origem) is not int
@@ -345,7 +345,18 @@ def receber_operacao():
             "erro": "Mensagem de replicacao invalida"
         }), 400
 
-    # Verificacao preliminar do lider conhecido
+    if (
+        timestamp_lamport is not None
+        and (
+            type(timestamp_lamport) is not int
+            or timestamp_lamport < 0
+        )
+    ):
+        return jsonify({
+            "erro": "Timestamp Lamport invalido"
+        }), 400
+
+    # Verifica o lider conhecido
     lider_conhecido = eleicao.obter_estado()["lider"]
 
     if lider_conhecido != origem:
@@ -353,12 +364,15 @@ def receber_operacao():
             "erro": "Origem nao corresponde ao lider conhecido"
         }), 409
 
-    sucesso, mensagem = persistencia.salvar_ou_validar_operacao(
-        operacao.get("id_operacao"),
-        operacao.get("eleitor"),
-        operacao.get("opcao"),
-        operacao.get("mandato"),
-        operacao.get("sequencia")
+    # Armazena a operacao recebida
+    sucesso, mensagem = (
+        persistencia.salvar_ou_validar_operacao(
+            operacao.get("id_operacao"),
+            operacao.get("eleitor"),
+            operacao.get("opcao"),
+            operacao.get("mandato"),
+            operacao.get("sequencia")
+        )
     )
 
     if not sucesso:
@@ -367,16 +381,22 @@ def receber_operacao():
             "erro": mensagem
         }), 409
 
+    # Atualiza o relogio logico ao receber a mensagem
+    if timestamp_lamport is not None:
+        relogio.receber_mensagem(timestamp_lamport)
+
     print(
         f"[Replicacao] No {ID_NO} armazenou "
-        f"operacao {operacao['id_operacao']}",
+        f"operacao {operacao['id_operacao']} "
+        f"Lamport={relogio.obter_valor()}",
         flush=True
     )
 
     return jsonify({
         "no": ID_NO,
         "status": "pendente",
-        "id_operacao": operacao["id_operacao"]
+        "id_operacao": operacao["id_operacao"],
+        "timestamp_lamport": relogio.obter_valor()
     }), 200
 
 
@@ -878,7 +898,8 @@ def receber_solicitacao_voto():
     resultados_replicacao = enviar_operacao(
         ID_NO,
         ENDERECOS_NOS,
-        operacao
+        operacao,
+        relogio
     )
 
     # O lider ja possui uma copia local

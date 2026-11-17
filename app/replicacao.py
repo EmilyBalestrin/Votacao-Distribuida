@@ -2,21 +2,33 @@
 import requests
 
 
-def enviar_operacao(id_origem, enderecos_nos, operacao):
+def enviar_operacao(
+    id_origem,
+    enderecos_nos,
+    operacao,
+    relogio=None
+):
     resultados = {}
 
     for id_no, endereco in enderecos_nos.items():
 
-        # Nao envia para o proprio servidor
         if id_no == id_origem:
             continue
+
+        # Registra um evento de envio no relogio
+        timestamp_lamport = None
+
+        if relogio is not None:
+            relogio.enviar_mensagem()
+            timestamp_lamport = relogio.obter_valor()
 
         try:
             resposta = requests.post(
                 f"{endereco}/replicacao/receber",
                 json={
                     "origem": id_origem,
-                    "operacao": operacao
+                    "operacao": operacao,
+                    "timestamp_lamport": timestamp_lamport
                 },
                 timeout=3
             )
@@ -28,7 +40,8 @@ def enviar_operacao(id_origem, enderecos_nos, operacao):
 
             print(
                 f"[Replicacao] No {id_no}: "
-                f"HTTP {resposta.status_code}",
+                f"HTTP {resposta.status_code} "
+                f"Lamport={timestamp_lamport}",
                 flush=True
             )
 
