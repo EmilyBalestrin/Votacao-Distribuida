@@ -10,7 +10,7 @@ __pycache__/
 *$py.class
 *.pyo
 
-# Cache e arquivos de testes
+# Cache e arquivos de tests
 .pytest_cache/
 .coverage
 .coverage.*
